@@ -49,6 +49,12 @@ class SessionManager:
         Auto-detects Playwright vs Chrome-extension format.
         Call once at startup (or on reconnect after an auth error).
         """
+        import os
+        env_cookies = os.environ.get("PO_COOKIES_JSON")
+        if env_cookies:
+            with open(self._path, "w", encoding="utf-8") as f:
+                f.write(env_cookies)
+
         if not self._path.exists():
             raise FileNotFoundError(
                 f"Cookie file not found at '{self._path}'.\n\n"
