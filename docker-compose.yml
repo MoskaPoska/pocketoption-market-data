@@ -1,0 +1,54 @@
+services:
+
+  # ── Redis (low-latency config) ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: mdp-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --hz 100
+      --tcp-backlog 511
+      --timeout 0
+      --tcp-keepalive 60
+      --loglevel notice
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mdp-net
+
+  # ── Market Data Provider App ────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mdp-app
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Mount cookies file at runtime — never bake into image
+      - ./storage_state.json:/app/storage_state.json:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - mdp-net
+
+networks:
+  mdp-net:
+    driver: bridge
