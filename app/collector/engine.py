@@ -192,30 +192,26 @@ class DirectCollector:
     ) -> None:
         logger.debug("TEXT ← %s", data[:200])
 
-        action, quote = self._parser.parse_text_frame(data)
+        action, quotes = self._parser.parse_text_frame(data)
 
         if action == "ping":
-            # EIO v4: server sends ping "2", we reply pong "3" immediately
             await ws.send_str("3")
             logger.debug("PONG →")
 
         elif action == "open":
-            # EIO handshake received → send Socket.IO CONNECT packet
             await ws.send_str("40")
             logger.info("Sent SIO CONNECT (40) →")
 
         elif action == "message" and data.startswith("40"):
-            # SIO CONNECT ack received → authenticate + subscribe (mirrors browser behavior)
             await self._send_auth_and_subscribe(ws)
 
         elif action == "close":
             self._reconnect_attempt += 1
             return
 
-        if quote is not None:
+        for quote in quotes:
             await self._publish(quote, recv_ts)
 
-        # Trigger step-2 subscription the moment server confirms auth
         if '["user_ready"' in data:
             await self._on_user_ready(ws)
 

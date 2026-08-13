@@ -63,49 +63,49 @@ class EngineIOParser:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def parse_text_frame(self, data: str) -> tuple[str, Optional[Quote]]:
+    def parse_text_frame(self, data: str) -> tuple[str, list["Quote"]]:
         """
         Parse one text WebSocket frame.
 
         Returns:
-            (action, quote)
+            (action, quotes)
             action ∈ {"ping", "pong", "open", "close", "message", "noop", "unknown"}
-            quote  — Quote instance if a market update was decoded, else None.
+            quotes — list of Quote instances decoded from this frame (may be empty).
 
         The caller must handle action == "ping" by sending "3" over the wire.
         """
         if not data:
-            return "unknown", None
+            return "unknown", []
 
         eio_type = data[0]
 
         match eio_type:
             case "2":
                 logger.debug("EIO ← PING (server-initiated)")
-                return "ping", None
+                return "ping", []
 
             case "3":
                 logger.debug("EIO ← PONG")
-                return "pong", None
+                return "pong", []
 
             case "0":
                 self._log_handshake(data[1:])
-                return "open", None
+                return "open", []
 
             case "1":
                 logger.warning("EIO ← CLOSE")
-                return "close", None
+                return "close", []
 
             case "6":
-                return "noop", None
+                return "noop", []
 
             case "4":
-                quote = self._parse_socketio(data[1:])
-                return "message", quote
+                quotes = self._parse_socketio(data[1:])
+                return "message", quotes
 
             case _:
                 logger.warning("Unknown EIO frame type '%s': %s", eio_type, data[:120])
-                return "unknown", None
+                return "unknown", []
 
     def parse_binary_frame(self, data: bytes) -> Optional[Quote]:
         """
@@ -150,21 +150,21 @@ class EngineIOParser:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _parse_socketio(self, data: str) -> Optional[Quote]:
+    def _parse_socketio(self, data: str) -> list["Quote"]:
         """Route to the correct Socket.IO handler by packet type."""
         if not data:
-            return None
+            return []
 
         sio_type = data[0]
 
         match sio_type:
             case "0":
                 logger.info("SIO ← CONNECT: %s", data[1:80])
-                return None
+                return []
 
             case "1":
                 logger.warning("SIO ← DISCONNECT: %s", data[1:80])
-                return None
+                return []
 
             case "2":
                 # Regular text event: '2["eventName", payload]'
@@ -173,52 +173,57 @@ class EngineIOParser:
             case "5":
                 # Binary event announcement: '5{N}-["eventName", {...}]'
                 self._handle_binary_announcement(data)
-                return None
+                return []
 
             case _:
                 logger.debug("SIO packet type '%s' — not handled", sio_type)
-                return None
+                return []
 
-    def _parse_text_event(self, json_str: str) -> Optional[Quote]:
+    def _parse_text_event(self, json_str: str) -> list["Quote"]:
         """Parse a regular Socket.IO event (SIO type 2)."""
         try:
             packet = json.loads(json_str)
         except json.JSONDecodeError as exc:
             logger.error("SIO event JSON decode error: %s | data=%s", exc, json_str[:200])
-            return None
+            return []
 
         if not isinstance(packet, list) or len(packet) < 1:
-            return None
+            return []
 
         event_name = packet[0]
         payload = packet[1] if len(packet) > 1 else None
 
         match event_name:
             case "updateStream":
-                return self._extract_quote(payload)
+                q = self._extract_quote(payload)
+                return [q] if q else []
 
             case "user_ready":
                 logger.info("SIO ← user_ready | user_id=%s", payload.get("id") if payload else "?")
-                return None
+                return []
 
             case "chat_room_list":
-                # Initial snapshot: list of rooms, each may have embedded market signals
+                # Initial snapshot: extract ALL signals from ALL rooms
                 logger.info("SIO ← chat_room_list (snapshot received)")
+                quotes = []
                 if isinstance(payload, dict) and "list" in payload:
                     for room in payload["list"]:
-                        quote = self._extract_signal_from_room(room)
-                        if quote:
-                            return quote  # return first found; rest arrive via updates
-                return None
+                        q = self._extract_signal_from_room(room)
+                        if q:
+                            quotes.append(q)
+                if quotes:
+                    logger.info("chat_room_list snapshot: extracted %d quotes", len(quotes))
+                return quotes
 
             case "chat_room_list_update":
-                # Real-time update for one room — this is where live quotes arrive
+                # Real-time update for one room
                 logger.debug("SIO ← chat_room_list_update")
-                return self._extract_signal_from_room(payload)
+                q = self._extract_signal_from_room(payload)
+                return [q] if q else []
 
             case _:
                 logger.debug("SIO text event '%s' — ignored", event_name)
-                return None
+                return []
 
     def _handle_binary_announcement(self, data: str) -> None:
         """
