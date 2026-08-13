@@ -42,10 +42,9 @@ logger = logging.getLogger(__name__)
 redis_client     = RedisClient()
 session_manager  = SessionManager(settings.STORAGE_STATE_PATH, redis_client)
 quote_queue      = asyncio.Queue()  # Decouples collectors from Redis
-collector        = DirectCollector(session_manager, quote_queue)
-events_collector = EventsCollector(session_manager, quote_queue)
 gateway          = WebSocketGateway(redis_client)
 cookie_watcher   = CookieWatcher()
+active_collectors = []
 
 # ── Background Tasks ──────────────────────────────────────────────────────────
 async def redis_publisher_task(queue: asyncio.Queue, redis: RedisClient) -> None:
@@ -75,15 +74,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         redis_publisher_task(quote_queue, redis_client), name="redis-publisher"
     )
 
-    # Chat collector (chat-po.site) — trading signals from community
-    collector_task = asyncio.create_task(
-        collector.start(), name="direct-collector"
-    )
-
-    # Events collector (events-po.com) — real-time price feed ~0.5s/tick
-    events_task = asyncio.create_task(
-        events_collector.start(), name="events-collector"
-    )
+    collector_tasks = []
+    symbols = settings.subscribe_symbols_list
+    if not symbols:
+        logger.warning("No symbols specified in SUBSCRIBE_SYMBOL!")
+        
+    for symbol in symbols:
+        direct = DirectCollector(session_manager, quote_queue, symbol)
+        events = EventsCollector(session_manager, quote_queue, symbol)
+        active_collectors.extend([direct, events])
+        
+        collector_tasks.append(
+            asyncio.create_task(direct.start(), name=f"direct-{symbol}")
+        )
+        collector_tasks.append(
+            asyncio.create_task(events.start(), name=f"events-{symbol}")
+        )
 
     # Cookie expiry watcher
     await cookie_watcher.start()
@@ -91,11 +97,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield   # ← application serves requests here
 
     logger.info("Shutting down …")
-    await collector.stop()
-    await events_collector.stop()
+    for col in active_collectors:
+        await col.stop()
     await cookie_watcher.stop()
 
-    for task in (collector_task, events_task, publisher_task):
+    for task in [*collector_tasks, publisher_task]:
         task.cancel()
         try:
             await task
@@ -136,11 +142,12 @@ async def ws_stream(websocket: WebSocket, symbol: str) -> None:
 @app.get("/health", tags=["monitoring"], summary="System health check")
 async def health() -> JSONResponse:
     redis_ok = await redis_client.ping()
-    status = "ok" if (redis_ok and collector.is_connected) else "degraded"
+    all_connected = all(c.is_connected for c in active_collectors) if active_collectors else False
+    status = "ok" if (redis_ok and all_connected) else "degraded"
     return JSONResponse(
         {
             "status": status,
-            "collector_connected": collector.is_connected,
+            "all_collectors_connected": all_connected,
             "redis": "ok" if redis_ok else "error",
             "active_clients": gateway.connection_count,
         },

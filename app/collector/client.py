@@ -27,6 +27,10 @@ class BaseWebSocketClient:
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.name = self.__class__.__name__
 
+    @property
+    def is_connected(self) -> bool:
+        return self.ws is not None and not self.ws.closed
+
     async def start(self) -> None:
         self._running = True
         logger.info("%s starting → %s", self.name, self.url)
@@ -71,6 +75,7 @@ class BaseWebSocketClient:
                     self.url,
                     headers=headers,
                     heartbeat=None,
+                    receive_timeout=30.0,
                     max_msg_size=0,
                     compress=False,
                     autoclose=True,
@@ -84,13 +89,20 @@ class BaseWebSocketClient:
                 self._reconnect_attempt += 1
                 if exc.status in {401, 403, 502}:
                     logger.error("%s auth failure (HTTP %d). Reloading session …", self.name, exc.status)
-                    await self.session.reload()
+                    try:
+                        await self.session.reload()
+                    except Exception as reload_exc:
+                        logger.error("%s session reload failed: %s", self.name, reload_exc)
                 else:
                     logger.error("%s WS handshake error: HTTP %d", self.name, exc.status)
                 raise
             except aiohttp.ClientConnectorError as exc:
                 self._reconnect_attempt += 1
                 logger.error("%s Connection refused: %s", self.name, exc)
+                raise
+            except asyncio.TimeoutError:
+                self._reconnect_attempt += 1
+                logger.error("%s Connection timed out (no data for 30s)", self.name)
                 raise
             finally:
                 self.ws = None

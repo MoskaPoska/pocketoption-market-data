@@ -26,6 +26,7 @@ class DirectCollector(SocketIOClient):
         self,
         session_manager: SessionManager,
         quote_queue: asyncio.Queue,
+        symbol: str,
     ) -> None:
         super().__init__(
             url=settings.SOURCE_WS_URL,
@@ -33,6 +34,8 @@ class DirectCollector(SocketIOClient):
             session_manager=session_manager
         )
         self.queue = quote_queue
+        self.symbol = symbol
+        self.name = f"DirectCollector[{symbol}]"
         self._decoder = QuoteDecoder()
 
     async def on_sio_connect(self) -> None:
@@ -43,26 +46,25 @@ class DirectCollector(SocketIOClient):
         )
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
-            logger.info("DirectCollector sent user_init (auth) → user_id=%s", settings.SOCKET_USER_ID)
+            logger.info("%s sent user_init (auth) → user_id=%s", self.name, settings.SOCKET_USER_ID)
 
     async def on_sio_text_event(self, event: str, payload: any, recv_ts: float) -> None:
         if event == "user_ready":
             if self.ws:
                 await self.ws.send_str('42["chat_room_list"]')
-                logger.info("DirectCollector sent chat_room_list (subscribe) →")
+                logger.info("%s sent chat_room_list (subscribe) →", self.name)
                 
-                for symbol in settings.subscribe_symbols_list:
-                    change_symbol = json.dumps(
-                        ["changeSymbol", {
-                            "asset":    symbol,
-                            "isDemo":   settings.SUBSCRIBE_IS_DEMO,
-                            "openType": "binary",
-                            "period":   60,
-                        }],
-                        separators=(",", ":"),
-                    )
-                    await self.ws.send_str(f"42{change_symbol}")
-                    logger.info("DirectCollector sent changeSymbol → %s", symbol)
+                change_symbol = json.dumps(
+                    ["changeSymbol", {
+                        "asset":    self.symbol,
+                        "isDemo":   settings.SUBSCRIBE_IS_DEMO,
+                        "openType": "binary",
+                        "period":   60,
+                    }],
+                    separators=(",", ":"),
+                )
+                await self.ws.send_str(f"42{change_symbol}")
+                logger.info("%s sent changeSymbol → %s", self.name, self.symbol)
 
         quotes = self._decoder.decode_text_event(event, payload)
         for quote in quotes:
@@ -78,8 +80,8 @@ class DirectCollector(SocketIOClient):
         try:
             self.queue.put_nowait((quote, latency_ms))
         except asyncio.QueueFull:
-            logger.warning("DirectCollector dropped quote (queue full): %s", quote.symbol)
+            logger.warning("%s dropped quote (queue full): %s", self.name, quote.symbol)
         else:
             logger.debug(
-                "DirectCollector published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
+                "%s published %s @ %.5f | latency=%.3fms", self.name, quote.symbol, quote.price, latency_ms
             )

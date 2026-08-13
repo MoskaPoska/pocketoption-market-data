@@ -26,6 +26,7 @@ class EventsCollector(SocketIOClient):
         self,
         session_manager: SessionManager,
         quote_queue: asyncio.Queue,
+        symbol: str,
     ) -> None:
         super().__init__(
             url=settings.EVENTS_WS_URL,
@@ -33,7 +34,15 @@ class EventsCollector(SocketIOClient):
             session_manager=session_manager
         )
         self.queue = quote_queue
+        self.symbol = symbol
+        self.name = f"EventsCollector[{symbol}]"
         self._decoder = QuoteDecoder()
+        self._ping_task: Optional[asyncio.Task] = None
+
+    async def stop(self) -> None:
+        if getattr(self, '_ping_task', None) and not self._ping_task.done():
+            self._ping_task.cancel()
+        await super().stop()
 
     async def on_sio_connect(self) -> None:
         """Triggered when Socket.IO is connected. Send auth and subscribe."""
@@ -57,22 +66,36 @@ class EventsCollector(SocketIOClient):
         )
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
-            logger.info("EventsCollector sent auth → uid=%s", uid)
+            logger.info("%s sent auth → uid=%s", self.name, uid)
 
-            # Keep sending heartbeats
-            await self.ws.send_str('42["ping-server"]')
+            subfor_msg = json.dumps(["subfor", self.symbol], separators=(",", ":"))
+            await self.ws.send_str(f"42{subfor_msg}")
             
-            for symbol in settings.subscribe_symbols_list:
-                subfor_msg = json.dumps(["subfor", symbol], separators=(",", ":"))
-                await self.ws.send_str(f"42{subfor_msg}")
-                
-                sub_msg = json.dumps(["changeSymbol", {"asset": symbol, "period": 5}], separators=(",", ":"))
-                await self.ws.send_str(f"42{sub_msg}")
-                logger.info("EventsCollector sent subfor and changeSymbol → %s", symbol)
+            sub_msg = json.dumps(["changeSymbol", {"asset": self.symbol, "period": 5}], separators=(",", ":"))
+            await self.ws.send_str(f"42{sub_msg}")
+            logger.info("%s sent subfor and changeSymbol", self.name)
+            
+            if self._ping_task and not self._ping_task.done():
+                self._ping_task.cancel()
+            self._ping_task = asyncio.create_task(self._ping_loop())
+
+    async def _ping_loop(self) -> None:
+        """Continuously send application-level pings to keep PO stream alive."""
+        while self._running and self.ws and not self.ws.closed:
+            try:
+                await asyncio.sleep(15.0)
+                if self.ws and not self.ws.closed:
+                    await self.ws.send_str('42["ping-server"]')
+                    logger.debug("%s sent ping-server", self.name)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("%s ping loop error: %s", self.name, exc)
+                break
 
     async def on_sio_text_event(self, event: str, payload: any, recv_ts: float) -> None:
         if event == "auth/success":
-            logger.info("EventsCollector auth success!")
+            logger.info("%s auth success!", self.name)
         else:
             quotes = self._decoder.decode_text_event(event, payload)
             for quote in quotes:
@@ -88,8 +111,8 @@ class EventsCollector(SocketIOClient):
         try:
             self.queue.put_nowait((quote, latency_ms))
         except asyncio.QueueFull:
-            logger.warning("EventsCollector dropped quote (queue full): %s", quote.symbol)
+            logger.warning("%s dropped quote (queue full): %s", self.name, quote.symbol)
         else:
             logger.debug(
-                "EventsCollector published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
+                "%s published %s @ %.5f | latency=%.3fms", self.name, quote.symbol, quote.price, latency_ms
             )
