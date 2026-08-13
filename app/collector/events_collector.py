@@ -150,15 +150,17 @@ class EventsCollector:
                     )
                     await ws.send_str(f"42{auth}")
                     logger.info("EventsCollector sent auth →")
+                    
+                    # demo-api-eu does not send auth/success, so we immediately send heartbeats/subscriptions
+                    await ws.send_str('42["ping-server"]')
+                    sub_msg = json.dumps(["changeSymbol", "EURUSD_otc"], separators=(",", ":"))
+                    await ws.send_str(f"42{sub_msg}")
+                    logger.info("EventsCollector sent ping-server and changeSymbol → EURUSD_otc")
+                    
                 else:
                     logger.warning("No SOCKET_SECRET available for auth!")
             elif sio.startswith('2["auth/success"'):
-                logger.info("EventsCollector auth success! Starting ping-server heartbeat and subscribing to symbols.")
-                await ws.send_str('42["ping-server"]')
-                # Try subscribing to our target symbol to trigger updateStream
-                sub_msg = json.dumps(["changeSymbol", "EURUSD_otc"], separators=(",", ":"))
-                await ws.send_str(f"42{sub_msg}")
-                logger.info("EventsCollector sent changeSymbol → EURUSD_otc")
+                logger.info("EventsCollector auth success!")
             elif sio.startswith("5"):  # binary event announcement
                 self._handle_binary_announcement(sio)
             # All other SIO packets: already logged above
