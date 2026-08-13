@@ -140,8 +140,8 @@ class EventsCollector:
                 auth = json.dumps(
                     ["auth", {
                         "session": ci_session,
-                        "isDemo": 1 if settings.PO_IS_DEMO else 0,
-                        "uid": settings.PO_UID,
+                        "isDemo": settings.SUBSCRIBE_IS_DEMO,
+                        "uid": settings.SOCKET_USER_ID,
                         "platform": 2,
                         "isFastHistory": True,
                         "isOptimized": True,
