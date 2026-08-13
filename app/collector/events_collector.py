@@ -153,8 +153,12 @@ class EventsCollector:
                 else:
                     logger.warning("No SOCKET_SECRET available for auth!")
             elif sio.startswith('2["auth/success"'):
-                logger.info("EventsCollector auth success! Starting ping-server heartbeat.")
+                logger.info("EventsCollector auth success! Starting ping-server heartbeat and subscribing to symbols.")
                 await ws.send_str('42["ping-server"]')
+                # Try subscribing to our target symbol to trigger updateStream
+                sub_msg = json.dumps(["changeSymbol", "EURUSD_otc"], separators=(",", ":"))
+                await ws.send_str(f"42{sub_msg}")
+                logger.info("EventsCollector sent changeSymbol → EURUSD_otc")
             elif sio.startswith("5"):  # binary event announcement
                 self._handle_binary_announcement(sio)
             # All other SIO packets: already logged above
@@ -183,11 +187,13 @@ class EventsCollector:
         self._pending_count = 0
         self._pending_attachments = []
 
-        if event_name != "updateStream":
+        if event_name not in ("updateStream", "updateAssets", "chafor"):
+            # Only log at DEBUG to avoid spam, but we only accept these 3
             logger.debug("EVENTS binary event '%s' — skipped", event_name)
             return
 
         for raw in attachments:
+            logger.info("[EVENTS BINARY] event=%s len=%d hex=%s", event_name, len(raw), raw.hex())
             quote = self._decode_update_stream(raw)
             if quote:
                 latency_ms = round((time.monotonic() - recv_ts) * 1000, 3)
@@ -195,6 +201,7 @@ class EventsCollector:
                 logger.debug("EVENTS published %s @ %.5f", quote.symbol, quote.price)
 
     def _decode_update_stream(self, raw: bytes) -> Optional[Quote]:
+
         """
         Decode 39-byte updateStream binary payload from events-po.com.
 
