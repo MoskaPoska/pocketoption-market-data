@@ -113,7 +113,8 @@ class EventsCollector:
                 break
 
     async def _on_text(self, data: str, ws: aiohttp.ClientWebSocketResponse, recv_ts: float) -> None:
-        logger.debug("EVENTS TEXT ← %s", data[:200])
+        # Log ALL text at INFO so we can see server responses in Railway
+        logger.info("EVENTS TEXT ← %s", data[:300])
 
         if not data:
             return
@@ -125,32 +126,23 @@ class EventsCollector:
         elif eio_type == "0":         # handshake
             try:
                 cfg = json.loads(data[1:])
-                logger.info("EventsCollector EIO handshake — sid=%s", cfg.get("sid"))
+                logger.info(
+                    "EventsCollector EIO handshake — sid=%s pingInterval=%s pingTimeout=%s",
+                    cfg.get("sid"), cfg.get("pingInterval"), cfg.get("pingTimeout"),
+                )
             except Exception:
                 pass
             await ws.send_str("40")   # SIO CONNECT
         elif eio_type == "4":
             sio = data[1:]
-            if sio.startswith("0"):   # SIO CONNECT ack
-                logger.info("EventsCollector SIO connected")
-                # Try session token auth (same as demo-api server)
-                if settings.SOCKET_SECRET:
-                    auth = json.dumps(
-                        ["auth", {
-                            "sessionToken": settings.SOCKET_SECRET,
-                            "uid": str(settings.SOCKET_USER_ID),
-                            "lang": "ru",
-                            "currentUrl": "cabinet/demo-quick-high-low",
-                            "isChart": 1,
-                        }],
-                        separators=(",", ":"),
-                    )
-                    await ws.send_str(f"42{auth}")
-                    logger.info("EventsCollector sent auth →")
+            if sio.startswith("0"):   # SIO CONNECT ack — cookies-only auth, no explicit event
+                logger.info("EventsCollector SIO connected — cookie auth, waiting for stream")
+                # Mirror what the browser sends: ping-server heartbeat
+                await ws.send_str('42["ping-server"]')
+                logger.info("EventsCollector sent ping-server →")
             elif sio.startswith("5"):  # binary event announcement
                 self._handle_binary_announcement(sio)
-            else:
-                logger.debug("EVENTS SIO: %s", sio[:100])
+            # All other SIO packets: already logged above
 
     def _handle_binary_announcement(self, data: str) -> None:
         try:
