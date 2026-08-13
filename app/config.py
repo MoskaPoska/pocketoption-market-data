@@ -30,8 +30,16 @@ class Settings(BaseSettings):
 
     # Symbol to subscribe to for continuous price ticks (changeSymbol event)
     # Set to empty string to skip — only chat_room_list will be used.
+    # Can be a comma-separated list of symbols: "EURUSD_otc,GBPUSD_otc"
     SUBSCRIBE_SYMBOL: str = "EURUSD_otc"
     SUBSCRIBE_IS_DEMO: int = 1        # 1 = demo, 0 = real
+
+    @property
+    def subscribe_symbols_list(self) -> list[str]:
+        """Returns SUBSCRIBE_SYMBOL as a list of strings."""
+        if not self.SUBSCRIBE_SYMBOL:
+            return []
+        return [sym.strip() for sym in self.SUBSCRIBE_SYMBOL.split(",") if sym.strip()]
 
     # ── Redis ─────────────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://redis:6379/0"

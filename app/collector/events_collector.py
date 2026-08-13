@@ -4,6 +4,7 @@ Events Low-Latency Socket.IO Collector
 Connects to demo-api-eu.po.market for high-frequency binary price feeds.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -11,7 +12,6 @@ import time
 from app.config import settings
 from app.collector.client import SocketIOClient
 from app.collector.parser import QuoteDecoder, Quote
-from app.broker.redis_client import RedisClient
 from app.session.manager import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -25,14 +25,14 @@ class EventsCollector(SocketIOClient):
     def __init__(
         self,
         session_manager: SessionManager,
-        redis_client: RedisClient,
+        quote_queue: asyncio.Queue,
     ) -> None:
         super().__init__(
             url=settings.EVENTS_WS_URL,
             origin=settings.EVENTS_WS_ORIGIN,
             session_manager=session_manager
         )
-        self._redis = redis_client
+        self.queue = quote_queue
         self._decoder = QuoteDecoder()
 
     async def on_sio_connect(self) -> None:
@@ -62,8 +62,7 @@ class EventsCollector(SocketIOClient):
             # Keep sending heartbeats
             await self.ws.send_str('42["ping-server"]')
             
-            symbol = settings.SUBSCRIBE_SYMBOL
-            if symbol:
+            for symbol in settings.subscribe_symbols_list:
                 subfor_msg = json.dumps(["subfor", symbol], separators=(",", ":"))
                 await self.ws.send_str(f"42{subfor_msg}")
                 
@@ -86,7 +85,11 @@ class EventsCollector(SocketIOClient):
 
     async def _publish(self, quote: Quote, recv_ts: float) -> None:
         latency_ms = round((time.monotonic() - recv_ts) * 1000, 3)
-        await self._redis.publish_quote(quote, latency_ms)
-        logger.debug(
-            "EventsCollector published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
-        )
+        try:
+            self.queue.put_nowait((quote, latency_ms))
+        except asyncio.QueueFull:
+            logger.warning("EventsCollector dropped quote (queue full): %s", quote.symbol)
+        else:
+            logger.debug(
+                "EventsCollector published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
+            )

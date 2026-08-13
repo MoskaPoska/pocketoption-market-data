@@ -25,41 +25,54 @@ logger = logging.getLogger(__name__)
 AUTH_SIGNAL_COOKIES = {"ci_session", "loggedIn", "autologin", "po_uuid"}
 
 
+import os
+from typing import Optional
+
+from app.broker.redis_client import RedisClient
+
 class SessionManager:
     """
     Loads and exposes session cookies from a Playwright or Chrome-extension
-    cookie file.
-
-    Usage::
-
-        sm = SessionManager(Path("storage_state.json"))
-        sm.load()
-        headers = {"Cookie": sm.get_cookie_header()}
+    cookie file, Redis, or environment variables.
     """
 
-    def __init__(self, storage_state_path: Path) -> None:
+    def __init__(self, storage_state_path: Path, redis_client: Optional[RedisClient] = None) -> None:
         self._path = storage_state_path
+        self._redis = redis_client
         self._cookies: dict[str, str] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def load(self) -> None:
+    async def load(self) -> None:
         """
         Load session cookies.
         Priority:
-          1. PO_COOKIES_JSON env var (full cookie export JSON)
-          2. storage_state.json file
-          3. Fallback: build minimal cookie from PO_SESSION_TOKEN (no file needed)
+          1. Redis key 'po:cookies' (if redis_client provided)
+          2. PO_COOKIES_JSON env var
+          3. storage_state.json file
+          4. PO_SESSION_TOKEN env var (cookieless auth)
         """
-        import os
-
         env_cookies = os.environ.get("PO_COOKIES_JSON")
         session_token = os.environ.get("PO_SESSION_TOKEN", "")
+        
+        raw_cookies_str = None
+        
+        if self._redis and getattr(self._redis, '_redis', None):
+            try:
+                redis_data = await self._redis._redis.get("po:cookies")
+                if redis_data:
+                    raw_cookies_str = redis_data.decode("utf-8")
+                    logger.info("Loaded cookies from Redis (po:cookies)")
+            except Exception as exc:
+                logger.warning("Failed to read from Redis po:cookies: %s", exc)
+                
+        if not raw_cookies_str and env_cookies:
+            raw_cookies_str = env_cookies
+            logger.info("Loaded cookies from PO_COOKIES_JSON env var")
 
-        if env_cookies:
-            # Write to file so existing parse logic works
+        if raw_cookies_str:
             with open(self._path, "w", encoding="utf-8") as f:
-                f.write(env_cookies)
+                f.write(raw_cookies_str)
 
         if self._path.exists():
             with self._path.open("r", encoding="utf-8") as fh:
@@ -82,15 +95,15 @@ class SessionManager:
             if expired:
                 logger.warning("Skipped %d expired cookies: %s", len(expired), expired)
             auth_present = AUTH_SIGNAL_COOKIES & set(self._cookies)
-            logger.info("Session loaded from file — total=%d cookies | auth=%s",
+            logger.info("Session loaded — total=%d cookies | auth=%s",
                         len(self._cookies), sorted(auth_present))
         elif session_token:
             # Cookieless mode: build minimal header from session token
-            logger.info("No cookie file found — using PO_SESSION_TOKEN for cookieless auth")
+            logger.info("No cookie source found — using PO_SESSION_TOKEN for cookieless auth")
             self._cookies = {"ci_session": session_token, "loggedIn": "1"}
         else:
             raise FileNotFoundError(
-                "No cookie source found. Set PO_COOKIES_JSON or PO_SESSION_TOKEN env var."
+                "No cookie source found. Set po:cookies in Redis, or PO_COOKIES_JSON/PO_SESSION_TOKEN env vars."
             )
 
     def get_cookie_header(self) -> str:
@@ -106,10 +119,10 @@ class SessionManager:
         """Return a copy of the cookies dict (name → value)."""
         return dict(self._cookies)
 
-    def reload(self) -> None:
-        """Reload cookies from disk (call after external session refresh)."""
-        logger.info("Reloading session from disk …")
-        self.load()
+    async def reload(self) -> None:
+        """Reload cookies from disk/Redis (call after external session refresh)."""
+        logger.info("Reloading session …")
+        await self.load()
 
     @property
     def is_loaded(self) -> bool:

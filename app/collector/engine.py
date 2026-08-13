@@ -4,6 +4,7 @@ Direct Low-Latency Engine.IO / Socket.IO Collector
 Connects to chat-po.site to retrieve fallback data.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -11,7 +12,6 @@ import time
 from app.config import settings
 from app.collector.client import SocketIOClient
 from app.collector.parser import QuoteDecoder, Quote
-from app.broker.redis_client import RedisClient
 from app.session.manager import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -25,14 +25,14 @@ class DirectCollector(SocketIOClient):
     def __init__(
         self,
         session_manager: SessionManager,
-        redis_client: RedisClient,
+        quote_queue: asyncio.Queue,
     ) -> None:
         super().__init__(
             url=settings.SOURCE_WS_URL,
             origin=settings.SOURCE_ORIGIN,
             session_manager=session_manager
         )
-        self._redis = redis_client
+        self.queue = quote_queue
         self._decoder = QuoteDecoder()
 
     async def on_sio_connect(self) -> None:
@@ -51,8 +51,7 @@ class DirectCollector(SocketIOClient):
                 await self.ws.send_str('42["chat_room_list"]')
                 logger.info("DirectCollector sent chat_room_list (subscribe) →")
                 
-                symbol = settings.SUBSCRIBE_SYMBOL
-                if symbol:
+                for symbol in settings.subscribe_symbols_list:
                     change_symbol = json.dumps(
                         ["changeSymbol", {
                             "asset":    symbol,
@@ -76,7 +75,11 @@ class DirectCollector(SocketIOClient):
 
     async def _publish(self, quote: Quote, recv_ts: float) -> None:
         latency_ms = round((time.monotonic() - recv_ts) * 1000, 3)
-        await self._redis.publish_quote(quote, latency_ms)
-        logger.debug(
-            "DirectCollector published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
-        )
+        try:
+            self.queue.put_nowait((quote, latency_ms))
+        except asyncio.QueueFull:
+            logger.warning("DirectCollector dropped quote (queue full): %s", quote.symbol)
+        else:
+            logger.debug(
+                "DirectCollector published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
+            )

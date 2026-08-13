@@ -26,6 +26,9 @@ class QuoteDecoder:
     Receives pre-parsed event names and payloads/attachments from SocketIOClient.
     """
 
+    def __init__(self) -> None:
+        self._successful_decoder: Optional[str] = None
+
     def decode_text_event(self, event_name: str, payload: any) -> list[Quote]:
         """Decode a regular Socket.IO text event."""
         match event_name:
@@ -76,48 +79,77 @@ class QuoteDecoder:
             )
 
             # ── Attempt 1: MessagePack ────────────────────────────────────
-            try:
-                import msgpack
-                payload = msgpack.unpackb(raw, raw=False)
-                logger.debug("[BINARY→MSGPACK] %s", payload)
-                if isinstance(payload, dict) and "symbol" in payload:
-                    return self._extract_quote(payload)
-                if isinstance(payload, (list, tuple)) and len(payload) >= 2:
-                    sym = str(payload[0])
-                    price = float(payload[1])
-                    ts = int(payload[2]) if len(payload) > 2 else int(_time.time())
-                    if ts > 2_000_000_000:
-                        ts = ts // 1000
-                    logger.info("Signal extracted via msgpack: symbol=%s price=%s", sym, price)
-                    return Quote(symbol=sym, price=price, timestamp=ts)
-            except Exception:
-                pass
-
-            # ── Attempt 2: UTF-8 JSON ─────────────────────────────────────
-            try:
-                text = raw.decode("utf-8")
-                payload = json.loads(text)
-                logger.debug("[BINARY→JSON] %s", payload)
-                if isinstance(payload, dict) and "symbol" in payload:
-                    return self._extract_quote(payload)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                pass
-
-            # ── Attempt 3: custom struct — try common layouts ─────────────
-            if len(raw) >= 18:
+            if self._successful_decoder in (None, "msgpack"):
                 try:
-                    sym_len = struct.unpack_from(">H", raw, 0)[0]
-                    if 2 <= sym_len <= 30 and len(raw) >= 2 + sym_len + 16:
-                        sym = raw[2:2 + sym_len].decode("ascii")
-                        price = struct.unpack_from(">d", raw, 2 + sym_len)[0]
-                        ts = struct.unpack_from(">q", raw, 2 + sym_len + 8)[0]
+                    import msgpack
+                    payload = msgpack.unpackb(raw, raw=False)
+                    logger.debug("[BINARY→MSGPACK] %s", payload)
+                    if isinstance(payload, dict) and "symbol" in payload:
+                        q = self._extract_quote(payload)
+                        if q:
+                            self._successful_decoder = "msgpack"
+                            return q
+                    if isinstance(payload, (list, tuple)) and len(payload) >= 2:
+                        sym = str(payload[0])
+                        price = float(payload[1])
+                        ts = int(payload[2]) if len(payload) > 2 else int(_time.time())
                         if ts > 2_000_000_000:
                             ts = ts // 1000
-                        if 0 < price < 1_000_000 and sym.replace("_", "").isalnum():
-                            logger.info("Signal extracted via struct: symbol=%s price=%s", sym, price)
+                        if abs(ts - _time.time()) < 300:
+                            logger.info("Signal extracted via msgpack: symbol=%s price=%s", sym, price)
+                            self._successful_decoder = "msgpack"
                             return Quote(symbol=sym, price=price, timestamp=ts)
                 except Exception:
                     pass
+
+            # ── Attempt 2: UTF-8 JSON ─────────────────────────────────────
+            if self._successful_decoder in (None, "json"):
+                try:
+                    text = raw.decode("utf-8")
+                    payload = json.loads(text)
+                    logger.debug("[BINARY→JSON] %s", payload)
+                    if isinstance(payload, dict) and "symbol" in payload:
+                        q = self._extract_quote(payload)
+                        if q:
+                            self._successful_decoder = "json"
+                            return q
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+
+            # ── Attempt 3: custom struct — try common layouts ─────────────
+            if self._successful_decoder in (None, "struct_be"):
+                if len(raw) >= 18:
+                    try:
+                        sym_len = struct.unpack_from(">H", raw, 0)[0]
+                        if 2 <= sym_len <= 30 and len(raw) >= 2 + sym_len + 16:
+                            sym = raw[2:2 + sym_len].decode("ascii")
+                            price = struct.unpack_from(">d", raw, 2 + sym_len)[0]
+                            ts = struct.unpack_from(">q", raw, 2 + sym_len + 8)[0]
+                            if ts > 2_000_000_000:
+                                ts = ts // 1000
+                            if 0 < price < 1_000_000 and sym.replace("_", "").isalnum() and abs(ts - _time.time()) < 300:
+                                logger.info("Signal extracted via struct BE: symbol=%s price=%s", sym, price)
+                                self._successful_decoder = "struct_be"
+                                return Quote(symbol=sym, price=price, timestamp=ts)
+                    except Exception:
+                        pass
+                        
+            if self._successful_decoder in (None, "struct_le"):
+                if len(raw) >= 18:
+                    try:
+                        sym_len = struct.unpack_from("<H", raw, 0)[0]
+                        if 2 <= sym_len <= 30 and len(raw) >= 2 + sym_len + 16:
+                            sym = raw[2:2 + sym_len].decode("ascii")
+                            price = struct.unpack_from("<d", raw, 2 + sym_len)[0]
+                            ts = struct.unpack_from("<q", raw, 2 + sym_len + 8)[0]
+                            if ts > 2_000_000_000:
+                                ts = ts // 1000
+                            if 0 < price < 1_000_000 and sym.replace("_", "").isalnum() and abs(ts - _time.time()) < 300:
+                                logger.info("Signal extracted via struct LE: symbol=%s price=%s", sym, price)
+                                self._successful_decoder = "struct_le"
+                                return Quote(symbol=sym, price=price, timestamp=ts)
+                    except Exception:
+                        pass
 
             # Log raw bytes for manual format discovery
             if event_name in ("updateStream", "updateAssets", "chafor"):
@@ -166,6 +198,11 @@ class QuoteDecoder:
                 ts = int(time.time())
             elif ts > 2000000000:
                 ts = int(ts / 1000)
+                
+            import time
+            if abs(ts - time.time()) > 300:
+                logger.warning("Signal timestamp %d out of bounds, dropping.", ts)
+                return None
 
             return Quote(
                 symbol=str(signal["symbol"]),
@@ -184,6 +221,10 @@ class QuoteDecoder:
                 ts = int(time.time())
             elif ts > 2000000000:
                 ts = int(ts / 1000)
+
+            if abs(ts - time.time()) > 300:
+                logger.warning("Quote timestamp %d out of bounds, dropping.", ts)
+                return None
 
             return Quote(
                 symbol=str(payload["symbol"]),

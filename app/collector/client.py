@@ -84,7 +84,7 @@ class BaseWebSocketClient:
                 self._reconnect_attempt += 1
                 if exc.status in {401, 403, 502}:
                     logger.error("%s auth failure (HTTP %d). Reloading session …", self.name, exc.status)
-                    self.session.reload()
+                    await self.session.reload()
                 else:
                     logger.error("%s WS handshake error: HTTP %d", self.name, exc.status)
                 raise

@@ -39,13 +39,27 @@ logger = logging.getLogger(__name__)
 
 
 # ── Singletons (module-level, shared across the process) ─────────────────────
-session_manager  = SessionManager(settings.STORAGE_STATE_PATH)
 redis_client     = RedisClient()
-collector        = DirectCollector(session_manager, redis_client)
-events_collector = EventsCollector(session_manager, redis_client)
+session_manager  = SessionManager(settings.STORAGE_STATE_PATH, redis_client)
+quote_queue      = asyncio.Queue()  # Decouples collectors from Redis
+collector        = DirectCollector(session_manager, quote_queue)
+events_collector = EventsCollector(session_manager, quote_queue)
 gateway          = WebSocketGateway(redis_client)
 cookie_watcher   = CookieWatcher()
 
+# ── Background Tasks ──────────────────────────────────────────────────────────
+async def redis_publisher_task(queue: asyncio.Queue, redis: RedisClient) -> None:
+    """Reads quotes from the queue and publishes them to Redis."""
+    logger.info("Redis publisher task started.")
+    while True:
+        try:
+            quote, latency_ms = await queue.get()
+            await redis.publish_quote(quote, latency_ms)
+            queue.task_done()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("Redis publisher task error: %s", exc)
 
 # ── Application lifespan ──────────────────────────────────────────────────────
 @asynccontextmanager
@@ -53,8 +67,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── Startup ──────────────────────────────────────────────────────────────
     logger.info("═══ Market Data Provider  starting ═══")
 
-    session_manager.load()          # parse storage_state.json
-    await redis_client.connect()    # open Redis pool
+    await redis_client.connect()    # open Redis pool first
+    await session_manager.load()    # parse storage_state.json or read from Redis
+
+    # Start the publisher task
+    publisher_task = asyncio.create_task(
+        redis_publisher_task(quote_queue, redis_client), name="redis-publisher"
+    )
 
     # Chat collector (chat-po.site) — trading signals from community
     collector_task = asyncio.create_task(
@@ -76,7 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await events_collector.stop()
     await cookie_watcher.stop()
 
-    for task in (collector_task, events_task):
+    for task in (collector_task, events_task, publisher_task):
         task.cancel()
         try:
             await task
