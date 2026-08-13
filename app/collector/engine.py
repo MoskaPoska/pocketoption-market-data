@@ -76,6 +76,9 @@ class DirectCollector(SocketIOClient):
             await self._publish(quote, recv_ts)
 
     async def _publish(self, quote: Quote, recv_ts: float) -> None:
+        if quote.symbol != self.symbol:
+            return
+            
         latency_ms = round((time.monotonic() - recv_ts) * 1000, 3)
         try:
             self.queue.put_nowait((quote, latency_ms))

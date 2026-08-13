@@ -83,10 +83,10 @@ class EventsCollector(SocketIOClient):
         """Continuously send application-level pings to keep PO stream alive."""
         while self._running and self.ws and not self.ws.closed:
             try:
-                await asyncio.sleep(15.0)
                 if self.ws and not self.ws.closed:
                     await self.ws.send_str('42["ping-server"]')
                     logger.debug("%s sent ping-server", self.name)
+                await asyncio.sleep(15.0)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -107,6 +107,9 @@ class EventsCollector(SocketIOClient):
             await self._publish(quote, recv_ts)
 
     async def _publish(self, quote: Quote, recv_ts: float) -> None:
+        if quote.symbol != self.symbol:
+            return
+            
         latency_ms = round((time.monotonic() - recv_ts) * 1000, 3)
         try:
             self.queue.put_nowait((quote, latency_ms))

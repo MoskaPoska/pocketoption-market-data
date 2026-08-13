@@ -59,6 +59,10 @@ class QuoteDecoder:
                 q = self._extract_signal_from_room(payload)
                 return [q] if q else []
 
+            case event if event.startswith("auth/"):
+                logger.warning("SIO ← %s | %s", event, payload)
+                return []
+
             case _:
                 logger.debug("SIO text event '%s' — ignored", event_name)
                 return []
@@ -152,7 +156,7 @@ class QuoteDecoder:
                         pass
 
             # Log raw bytes for manual format discovery
-            if event_name in ("updateStream", "updateAssets", "chafor"):
+            if event_name in ("updateStream", "chafor"):
                 logger.info(
                     "[BINARY UNDECODABLE] event='%s' len=%d hex=%s repr=%r",
                     event_name, len(raw), raw[:80].hex(), raw[:80],
@@ -188,7 +192,7 @@ class QuoteDecoder:
             if not signal:
                 return None
 
-            logger.info(
+            logger.debug(
                 "Signal extracted: symbol=%s price=%s",
                 signal.get("symbol"), signal.get("price", signal.get("value")),
             )
