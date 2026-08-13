@@ -258,6 +258,24 @@ class DirectCollector:
         await ws.send_str('42["chat_room_list"]')
         logger.info("Sent chat_room_list (subscribe) →")
 
+        # Step 3: subscribe to a specific symbol for continuous price ticks.
+        # This mirrors the browser's `changeSymbol` event, which triggers
+        # the server to start sending `updateStream` binary frames for the asset.
+        symbol = settings.SUBSCRIBE_SYMBOL
+        if symbol:
+            import json as _json
+            payload = _json.dumps(
+                ["changeSymbol", {
+                    "asset":    symbol,
+                    "isDemo":   settings.SUBSCRIBE_IS_DEMO,
+                    "openType": "binary",
+                    "period":   60,  # m1 = 60 seconds
+                }],
+                separators=(",", ":"),
+            )
+            await ws.send_str(f"42{payload}")
+            logger.info("Sent changeSymbol → %s (demo=%d)", symbol, settings.SUBSCRIBE_IS_DEMO)
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _build_headers(self) -> dict[str, str]:

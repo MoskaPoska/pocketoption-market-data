@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     SOCKET_USER_ID: int = 0          # your numeric user ID
     SOCKET_SECRET: str = ""          # session secret from user_init message
 
+    # Symbol to subscribe to for continuous price ticks (changeSymbol event)
+    # Set to empty string to skip — only chat_room_list will be used.
+    SUBSCRIBE_SYMBOL: str = "EURUSD_otc"
+    SUBSCRIBE_IS_DEMO: int = 1        # 1 = demo, 0 = real
+
     # ── Redis ─────────────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://redis:6379/0"
 
