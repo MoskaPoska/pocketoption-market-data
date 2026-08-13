@@ -11,3 +11,6 @@ redis>=5.0.4
 
 # Configuration
 pydantic-settings>=2.2.0
+
+# Binary frame decoding (PocketOption updateStream)
+msgpack>=1.0.8

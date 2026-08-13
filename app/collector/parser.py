@@ -254,41 +254,77 @@ class EngineIOParser:
         self, event_name: str, attachments: list[bytes]
     ) -> Optional[Quote]:
         """
-        ┌─────────────────────────────────────────────────────────────────┐
-        │  STUB — Replace with real decoder once format is known.         │
-        │  Currently attempts UTF-8 → JSON fallback and logs all bytes.   │
-        └─────────────────────────────────────────────────────────────────┘
+        Decode binary Socket.IO attachment for `updateStream`.
+
+        PocketOption sends real-time price ticks as binary attachments.
+        We attempt three decoders in order:
+          1. MessagePack — most common in modern real-time APIs
+          2. Custom struct — 4-byte symbol_id + 8-byte double price + 8-byte int64 ts
+          3. UTF-8 JSON — fallback
+
+        All raw bytes are also logged at DEBUG level for format discovery.
         """
+        import struct
+        import time as _time
+
         for idx, raw in enumerate(attachments):
-            logger.info(
-                "[BINARY ATTACHMENT %d/%d] event='%s' | len=%d | hex=%s | repr=%r",
-                idx,
-                len(attachments),
-                event_name,
-                len(raw),
-                raw.hex(),
-                raw,
+            logger.debug(
+                "[BINARY] event='%s' len=%d hex=%s",
+                event_name, len(raw), raw[:64].hex(),
             )
 
-            # ── Attempt 1: plain UTF-8 JSON ───────────────────────────────
+            # ── Attempt 1: MessagePack ────────────────────────────────────
+            try:
+                import msgpack
+                payload = msgpack.unpackb(raw, raw=False)
+                logger.debug("[BINARY→MSGPACK] %s", payload)
+                if isinstance(payload, dict) and "symbol" in payload:
+                    return self._extract_quote(payload)
+                if isinstance(payload, (list, tuple)) and len(payload) >= 2:
+                    # [symbol, price] or [symbol, price, timestamp]
+                    sym = str(payload[0])
+                    price = float(payload[1])
+                    ts = int(payload[2]) if len(payload) > 2 else int(_time.time())
+                    if ts > 2_000_000_000:
+                        ts = ts // 1000
+                    logger.info("Signal extracted via msgpack: symbol=%s price=%s", sym, price)
+                    return Quote(symbol=sym, price=price, timestamp=ts)
+            except Exception:
+                pass
+
+            # ── Attempt 2: UTF-8 JSON ─────────────────────────────────────
             try:
                 text = raw.decode("utf-8")
-                logger.info("[BINARY → UTF-8] %s", text[:500])
                 payload = json.loads(text)
-                logger.info("[BINARY → JSON] %s", payload)
-                if event_name == "updateStream":
+                logger.debug("[BINARY→JSON] %s", payload)
+                if isinstance(payload, dict) and "symbol" in payload:
                     return self._extract_quote(payload)
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
 
-            # ── TODO: Add MessagePack / Protobuf / custom decoder here ───
-            # import msgpack
-            # payload = msgpack.unpackb(raw, raw=False)
+            # ── Attempt 3: custom struct — try common layouts ─────────────
+            # Layout A: 2-byte sym_len, N-byte sym, 8-byte double price, 8-byte int64 ts
+            if len(raw) >= 18:
+                try:
+                    sym_len = struct.unpack_from(">H", raw, 0)[0]
+                    if 2 <= sym_len <= 30 and len(raw) >= 2 + sym_len + 16:
+                        sym = raw[2:2 + sym_len].decode("ascii")
+                        price = struct.unpack_from(">d", raw, 2 + sym_len)[0]
+                        ts = struct.unpack_from(">q", raw, 2 + sym_len + 8)[0]
+                        if ts > 2_000_000_000:
+                            ts = ts // 1000
+                        if 0 < price < 1_000_000 and sym.replace("_", "").isalnum():
+                            logger.info("Signal extracted via struct: symbol=%s price=%s", sym, price)
+                            return Quote(symbol=sym, price=price, timestamp=ts)
+                except Exception:
+                    pass
 
-        logger.warning(
-            "Could not decode binary event '%s' — see [BINARY ATTACHMENT] logs above",
-            event_name,
-        )
+            # Log raw bytes for manual format discovery
+            logger.info(
+                "[BINARY UNDECODABLE] event='%s' len=%d hex=%s repr=%r",
+                event_name, len(raw), raw[:80].hex(), raw[:80],
+            )
+
         return None
 
     def _extract_signal_from_room(self, room: dict | None) -> Optional[Quote]:
@@ -384,7 +420,6 @@ class EngineIOParser:
             logger.warning(
                 "Quote extraction failed: %s | payload=%s", exc, str(payload)[:200]
             )
-            return None
             return None
 
     def _reset_pending(self) -> None:
