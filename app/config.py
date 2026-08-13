@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     )
     SOURCE_ORIGIN: str = "https://chat-po.site"
 
+    # Real-time price feed WebSocket (events-po.com — updateStream binary ~0.5s)
+    EVENTS_WS_URL: str = "wss://events-po.com/socket.io/?EIO=4&transport=websocket"
+    EVENTS_WS_ORIGIN: str = "https://pocketoption.com"
+
     # ── Session ───────────────────────────────────────────────────────────────
     # Path to Playwright storage_state.json produced externally
     STORAGE_STATE_PATH: Path = Path("storage_state.json")

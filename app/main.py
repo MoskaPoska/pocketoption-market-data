@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.session.manager import SessionManager
 from app.collector.engine import DirectCollector
+from app.collector.events_collector import EventsCollector
 from app.broker.redis_client import RedisClient
 from app.gateway.ws_handler import WebSocketGateway
 from app.monitor.cookie_watcher import CookieWatcher
@@ -38,11 +39,12 @@ logger = logging.getLogger(__name__)
 
 
 # ── Singletons (module-level, shared across the process) ─────────────────────
-session_manager = SessionManager(settings.STORAGE_STATE_PATH)
-redis_client    = RedisClient()
-collector       = DirectCollector(session_manager, redis_client)
-gateway         = WebSocketGateway(redis_client)
-cookie_watcher  = CookieWatcher()
+session_manager  = SessionManager(settings.STORAGE_STATE_PATH)
+redis_client     = RedisClient()
+collector        = DirectCollector(session_manager, redis_client)
+events_collector = EventsCollector(session_manager, redis_client)
+gateway          = WebSocketGateway(redis_client)
+cookie_watcher   = CookieWatcher()
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
@@ -54,25 +56,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_manager.load()          # parse storage_state.json
     await redis_client.connect()    # open Redis pool
 
-    # Collector runs as a background task for the lifetime of the app
+    # Chat collector (chat-po.site) — trading signals from community
     collector_task = asyncio.create_task(
         collector.start(), name="direct-collector"
     )
 
-    # Cookie expiry watcher — notifies admins 7 days before cookies die
+    # Events collector (events-po.com) — real-time price feed ~0.5s/tick
+    events_task = asyncio.create_task(
+        events_collector.start(), name="events-collector"
+    )
+
+    # Cookie expiry watcher
     await cookie_watcher.start()
 
     yield   # ← application serves requests here
 
     logger.info("Shutting down …")
     await collector.stop()
+    await events_collector.stop()
     await cookie_watcher.stop()
 
-    collector_task.cancel()
-    try:
-        await collector_task
-    except asyncio.CancelledError:
-        pass
+    for task in (collector_task, events_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     await redis_client.close()
     logger.info("═══ Shutdown complete ═══")
