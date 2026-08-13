@@ -137,28 +137,30 @@ class EventsCollector:
             sio = data[1:]
             if sio.startswith("0"):   # SIO CONNECT ack
                 logger.info("EventsCollector SIO connected. Sending auth...")
-                if settings.SOCKET_SECRET:
-                    auth = json.dumps(
-                        ["auth", {
-                            "sessionToken": settings.SOCKET_SECRET,
-                            "uid": str(settings.SOCKET_USER_ID),
-                            "lang": "ru",
-                            "currentUrl": "cabinet/demo-quick-high-low",
-                            "isChart": 1,
-                        }],
-                        separators=(",", ":"),
-                    )
-                    await ws.send_str(f"42{auth}")
-                    logger.info("EventsCollector sent auth →")
-                    
-                    # demo-api-eu does not send auth/success, so we immediately send heartbeats/subscriptions
-                    await ws.send_str('42["ping-server"]')
-                    sub_msg = json.dumps(["changeSymbol", "EURUSD_otc"], separators=(",", ":"))
-                    await ws.send_str(f"42{sub_msg}")
-                    logger.info("EventsCollector sent ping-server and changeSymbol → EURUSD_otc")
-                    
-                else:
-                    logger.warning("No SOCKET_SECRET available for auth!")
+                ci_session = self._session.get_cookies_dict().get("ci_session", "")
+                auth = json.dumps(
+                    ["auth", {
+                        "session": ci_session,
+                        "isDemo": 1 if settings.PO_IS_DEMO else 0,
+                        "uid": settings.PO_UID,
+                        "platform": 2,
+                        "isFastHistory": True,
+                        "isOptimized": True,
+                    }],
+                    separators=(",", ":"),
+                )
+                await ws.send_str(f"42{auth}")
+                logger.info("EventsCollector sent auth →")
+                
+                # Send heartbeats/subscriptions (based on browser traffic)
+                await ws.send_str('42["ping-server"]')
+                
+                subfor_msg = json.dumps(["subfor", "EURUSD_otc"], separators=(",", ":"))
+                await ws.send_str(f"42{subfor_msg}")
+                
+                sub_msg = json.dumps(["changeSymbol", {"asset": "EURUSD_otc", "period": 5}], separators=(",", ":"))
+                await ws.send_str(f"42{sub_msg}")
+                logger.info("EventsCollector sent subfor and changeSymbol → EURUSD_otc")
             elif sio.startswith('2["auth/success"'):
                 logger.info("EventsCollector auth success!")
             elif sio.startswith("5"):  # binary event announcement
