@@ -84,18 +84,31 @@ class EventsCollector:
 
         connector = aiohttp.TCPConnector(ttl_dns_cache=300, limit=1)
         async with aiohttp.ClientSession(connector=connector) as http:
-            async with http.ws_connect(
-                settings.EVENTS_WS_URL,
-                headers=headers,
-                heartbeat=None,
-                max_msg_size=0,
-                compress=False,
-                autoclose=True,
-                autoping=False,
-            ) as ws:
-                self._reconnect_attempt = 0
-                logger.info("EventsCollector connected ✓")
-                await self._receive_loop(ws)
+            try:
+                async with http.ws_connect(
+                    settings.EVENTS_WS_URL,
+                    headers=headers,
+                    heartbeat=None,
+                    max_msg_size=0,
+                    compress=False,
+                    autoclose=True,
+                    autoping=False,
+                ) as ws:
+                    self._reconnect_attempt = 0
+                    logger.info("EventsCollector connected ✓")
+                    await self._receive_loop(ws)
+            except aiohttp.WSServerHandshakeError as exc:
+                self._reconnect_attempt += 1
+                if exc.status in {401, 403, 502}:
+                    logger.error("EventsCollector auth failure (HTTP %d). Reloading session …", exc.status)
+                    self._session.reload()
+                else:
+                    logger.error("EventsCollector WS handshake error: HTTP %d", exc.status)
+                raise
+            except aiohttp.ClientConnectorError as exc:
+                self._reconnect_attempt += 1
+                logger.error("EventsCollector connection refused: %s", exc)
+                raise
 
     async def _receive_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         async for msg in ws:
@@ -154,12 +167,14 @@ class EventsCollector:
                 # Send heartbeats/subscriptions (based on browser traffic)
                 await ws.send_str('42["ping-server"]')
                 
-                subfor_msg = json.dumps(["subfor", "EURUSD_otc"], separators=(",", ":"))
-                await ws.send_str(f"42{subfor_msg}")
-                
-                sub_msg = json.dumps(["changeSymbol", {"asset": "EURUSD_otc", "period": 5}], separators=(",", ":"))
-                await ws.send_str(f"42{sub_msg}")
-                logger.info("EventsCollector sent subfor and changeSymbol → EURUSD_otc")
+                symbol = settings.SUBSCRIBE_SYMBOL
+                if symbol:
+                    subfor_msg = json.dumps(["subfor", symbol], separators=(",", ":"))
+                    await ws.send_str(f"42{subfor_msg}")
+                    
+                    sub_msg = json.dumps(["changeSymbol", {"asset": symbol, "period": 5}], separators=(",", ":"))
+                    await ws.send_str(f"42{sub_msg}")
+                    logger.info("EventsCollector sent subfor and changeSymbol → %s", symbol)
             elif sio.startswith('2["auth/success"'):
                 logger.info("EventsCollector auth success!")
             elif sio.startswith("5"):  # binary event announcement
