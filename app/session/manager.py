@@ -45,74 +45,58 @@ class SessionManager:
 
     def load(self) -> None:
         """
-        Parse the cookie file and store all non-expired cookies.
-        Auto-detects Playwright vs Chrome-extension format.
-        Call once at startup (or on reconnect after an auth error).
+        Load session cookies.
+        Priority:
+          1. PO_COOKIES_JSON env var (full cookie export JSON)
+          2. storage_state.json file
+          3. Fallback: build minimal cookie from PO_SESSION_TOKEN (no file needed)
         """
         import os
+
         env_cookies = os.environ.get("PO_COOKIES_JSON")
+        session_token = os.environ.get("PO_SESSION_TOKEN", "")
+
         if env_cookies:
+            # Write to file so existing parse logic works
             with open(self._path, "w", encoding="utf-8") as f:
                 f.write(env_cookies)
 
-        if not self._path.exists():
+        if self._path.exists():
+            with self._path.open("r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            cookie_list = self._parse_raw(raw)
+            now = time.time()
+            loaded: dict[str, str] = {}
+            expired: list[str] = []
+            for c in cookie_list:
+                name = c.get("name", "")
+                value = c.get("value", "")
+                if not name:
+                    continue
+                exp = c.get("expires", c.get("expirationDate", -1))
+                if exp != -1 and exp < now:
+                    expired.append(name)
+                    continue
+                loaded[name] = value
+            self._cookies = loaded
+            if expired:
+                logger.warning("Skipped %d expired cookies: %s", len(expired), expired)
+            auth_present = AUTH_SIGNAL_COOKIES & set(self._cookies)
+            logger.info("Session loaded from file — total=%d cookies | auth=%s",
+                        len(self._cookies), sorted(auth_present))
+        elif session_token:
+            # Cookieless mode: build minimal header from session token
+            logger.info("No cookie file found — using PO_SESSION_TOKEN for cookieless auth")
+            self._cookies = {"ci_session": session_token, "loggedIn": "1"}
+        else:
             raise FileNotFoundError(
-                f"Cookie file not found at '{self._path}'.\n\n"
-                "Option A — Playwright storage_state:\n"
-                "  await context.storage_state(path='storage_state.json')\n\n"
-                "Option B — Chrome extension export (EditThisCookie, etc.):\n"
-                "  Export as JSON and save to storage_state.json"
-            )
-
-        with self._path.open("r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-
-        cookie_list = self._parse_raw(raw)
-        now = time.time()
-
-        loaded: dict[str, str] = {}
-        expired: list[str] = []
-
-        for c in cookie_list:
-            name = c.get("name", "")
-            value = c.get("value", "")
-            if not name:
-                continue
-
-            # expires / expirationDate — both are float Unix timestamps
-            exp = c.get("expires", c.get("expirationDate", -1))
-            if exp != -1 and exp < now:
-                expired.append(name)
-                continue
-
-            loaded[name] = value
-
-        self._cookies = loaded
-
-        if expired:
-            logger.warning("Skipped %d expired cookies: %s", len(expired), expired)
-
-        auth_present = AUTH_SIGNAL_COOKIES & set(self._cookies)
-        auth_missing = AUTH_SIGNAL_COOKIES - set(self._cookies)
-
-        logger.info(
-            "Session loaded — total=%d | auth_present=%s | auth_missing=%s | path='%s'",
-            len(self._cookies),
-            sorted(auth_present),
-            sorted(auth_missing),
-            self._path,
-        )
-
-        if auth_missing:
-            logger.warning(
-                "Auth cookies missing: %s — connection may fail or be unauthenticated",
-                sorted(auth_missing),
+                "No cookie source found. Set PO_COOKIES_JSON or PO_SESSION_TOKEN env var."
             )
 
     def get_cookie_header(self) -> str:
         """
         Return all cookies as a single Cookie HTTP header string.
-        Example: "ci_session=abc...; loggedIn=1; po_uuid=fda6..."
+        Example: "ci_session=abc...; loggedIn=1"
         """
         if not self._cookies:
             raise RuntimeError("Session not loaded. Call SessionManager.load() first.")
