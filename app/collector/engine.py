@@ -57,6 +57,10 @@ class DirectCollector:
         # Current WebSocket (kept for graceful close)
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
 
+        # Cross-pair price cache for synthetic quote computation
+        # e.g. EURUSD_otc = EURGBP * GBPUSD
+        self._price_cache: dict[str, float] = {}
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -221,12 +225,36 @@ class DirectCollector:
             await self._publish(quote, recv_ts)
 
     async def _publish(self, quote: Quote, recv_ts: float) -> None:
-        """Measure latency and publish to Redis."""
+        """Measure latency and publish to Redis. Also update price cache for synthesis."""
         latency_ms = round((time.monotonic() - recv_ts) * 1000, 3)
         await self._redis.publish_quote(quote, latency_ms)
         logger.debug(
             "Published %s @ %.5f | latency=%.3fms", quote.symbol, quote.price, latency_ms
         )
+        # Update price cache and compute synthetic pairs
+        sym = quote.symbol.upper().replace("-", "")
+        self._price_cache[sym] = quote.price
+        await self._maybe_publish_synthetics(recv_ts)
+
+    async def _maybe_publish_synthetics(self, recv_ts: float) -> None:
+        """
+        Compute and publish synthetic cross-pair quotes when we have both legs.
+        EURUSD_otc  = EURGBP * GBPUSD  (or EURGBP_OTC * GBPUSD)
+        AUDUSD_otc  = AUDUSD             (already comes directly sometimes)
+        """
+        import time as _time
+        cache = self._price_cache
+        now_ts = int(_time.time())
+
+        # ── EURUSD_otc = EURGBP × GBPUSD ─────────────────────────────────
+        eurgbp = cache.get("EURGBP") or cache.get("EURGBP_OTC")
+        gbpusd = cache.get("GBPUSD") or cache.get("GBPUSD_OTC")
+        if eurgbp and gbpusd:
+            synthetic_eurusd = round(eurgbp * gbpusd, 5)
+            q = Quote(symbol="EURUSD_otc", price=synthetic_eurusd, timestamp=now_ts)
+            await self._redis.publish_quote(q, 0.0)
+            logger.debug("Synthetic EURUSD_otc=%.5f (EURGBP=%.5f × GBPUSD=%.5f)",
+                         synthetic_eurusd, eurgbp, gbpusd)
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 
