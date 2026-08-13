@@ -1,12 +1,11 @@
 # Core async framework
 fastapi>=0.111.0
-uvicorn[standard]>=0.29.0       # ASGI server — pulls uvloop on Linux automatically
-uvloop>=0.19.0                  # Fast event loop (Linux/macOS only, ignored on Windows)
+uvicorn[standard]>=0.29.0       # ASGI server
 
-# WebSocket collector
-aiohttp[speedups]>=3.9.5        # speedups = aiodns + brotli (works on Linux)
+# PocketOption direct API
+pocketoptionapi-async>=2.0.1
 
-# Redis Pub/Sub
+# Redis storage
 redis>=5.0.4
 
 # Configuration
