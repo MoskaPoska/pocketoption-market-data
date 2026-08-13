@@ -135,14 +135,30 @@ class EventsCollector:
             await ws.send_str("40")   # SIO CONNECT
         elif eio_type == "4":
             sio = data[1:]
-            if sio.startswith("0"):   # SIO CONNECT ack — cookies-only auth, no explicit event
-                logger.info("EventsCollector SIO connected — cookie auth, waiting for stream")
-                # Mirror what the browser sends: ping-server heartbeat
+            if sio.startswith("0"):   # SIO CONNECT ack
+                logger.info("EventsCollector SIO connected. Sending auth...")
+                if settings.SOCKET_SECRET:
+                    auth = json.dumps(
+                        ["auth", {
+                            "sessionToken": settings.SOCKET_SECRET,
+                            "uid": str(settings.SOCKET_USER_ID),
+                            "lang": "ru",
+                            "currentUrl": "cabinet/demo-quick-high-low",
+                            "isChart": 1,
+                        }],
+                        separators=(",", ":"),
+                    )
+                    await ws.send_str(f"42{auth}")
+                    logger.info("EventsCollector sent auth →")
+                else:
+                    logger.warning("No SOCKET_SECRET available for auth!")
+            elif sio.startswith('2["auth/success"'):
+                logger.info("EventsCollector auth success! Starting ping-server heartbeat.")
                 await ws.send_str('42["ping-server"]')
-                logger.info("EventsCollector sent ping-server →")
             elif sio.startswith("5"):  # binary event announcement
                 self._handle_binary_announcement(sio)
             # All other SIO packets: already logged above
+
 
     def _handle_binary_announcement(self, data: str) -> None:
         try:
