@@ -349,10 +349,17 @@ class EngineIOParser:
                 "Signal extracted: symbol=%s price=%s",
                 signal.get("symbol"), signal.get("price", signal.get("value")),
             )
+            ts = int(signal.get("timestamp", signal.get("time", 0)))
+            if ts <= 0:
+                import time
+                ts = int(time.time())
+            elif ts > 2000000000:
+                ts = int(ts / 1000)
+
             return Quote(
                 symbol=str(signal["symbol"]),
                 price=float(signal.get("price", signal.get("value", 0))),
-                timestamp=int(signal.get("timestamp", signal.get("time", 0))),
+                timestamp=ts,
             )
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             logger.debug("Signal extraction failed: %s | room=%s", exc, str(room)[:300])
@@ -360,16 +367,24 @@ class EngineIOParser:
 
     def _extract_quote(self, payload: dict) -> Optional[Quote]:
         """Extract a Quote from an updateStream payload dict."""
+        import time
         try:
+            ts = int(payload.get("timestamp", 0))
+            if ts <= 0:
+                ts = int(time.time())
+            elif ts > 2000000000:
+                ts = int(ts / 1000) # Convert ms to s
+
             return Quote(
                 symbol=str(payload["symbol"]),
                 price=float(payload["price"]),
-                timestamp=int(payload.get("timestamp", 0)),
+                timestamp=ts,
             )
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Quote extraction failed: %s | payload=%s", exc, str(payload)[:200]
             )
+            return None
             return None
 
     def _reset_pending(self) -> None:
