@@ -192,7 +192,7 @@ async def preload_history() -> None:
 async def lifespan(app: FastAPI):
     global po_client
     logger.info("═══ Market Data Provider (pocketoptionapi) starting ═══")
-    logger.info("Mode: %s | Symbols: %s", "DEMO" if IS_DEMO else "REAL", SYMBOLS)
+    logger.info("Mode: %s | Symbols: %s | UID: %s", "DEMO" if IS_DEMO else "REAL", SYMBOLS, UID)
 
     # Connect to Redis
     r = await get_redis()
@@ -201,31 +201,40 @@ async def lifespan(app: FastAPI):
 
     # Build SSID and connect to PocketOption
     ssid = build_ssid()
+    logger.info("SSID preview: %s", ssid[:70])
+
     po_client = AsyncPocketOptionClient(
         ssid=ssid,
         is_demo=IS_DEMO,
         auto_reconnect=True,
-        enable_logging=False,  # suppress internal noise
+        enable_logging=True,   # verbose — we need to see what happens
     )
     po_client.add_event_callback("candles", on_candle_event)
 
-    connected = await po_client.connect()
-    if not connected:
-        raise RuntimeError("Failed to connect to PocketOption!")
-    logger.info("PocketOption connected ✓ (demo=%s)", IS_DEMO)
-
-    # Preload history
-    await preload_history()
-    logger.info("History preloaded ✓ — streaming live ticks now")
+    try:
+        connected = await po_client.connect()
+        if not connected:
+            logger.error("PocketOption connect() returned False — check SSID and network")
+            # Don't crash — keep the app alive so Railway doesn't restart loop
+        else:
+            logger.info("PocketOption connected ✓ (demo=%s)", IS_DEMO)
+            await preload_history()
+            logger.info("History preloaded ✓ — streaming live ticks now")
+    except Exception as exc:
+        logger.exception("PocketOption connection failed: %s", exc)
 
     yield
 
     # Shutdown
     if po_client:
-        await po_client.disconnect()
+        try:
+            await po_client.disconnect()
+        except Exception:
+            pass
     if redis_pool:
         await redis_pool.aclose()
     logger.info("Shutdown complete.")
+
 
 
 app = FastAPI(title="PO Market Data Provider", lifespan=lifespan)
