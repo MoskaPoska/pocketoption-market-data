@@ -36,6 +36,10 @@ class QuoteDecoder:
                 q = self._extract_quote(payload)
                 return [q] if q else []
 
+            case "successauth":
+                # auth handled by EventsCollector directly
+                return []
+
             case _:
                 logger.debug("SIO text event '%s' — ignored", event_name)
                 return []
@@ -61,21 +65,21 @@ class QuoteDecoder:
                     import msgpack
                     payload = msgpack.unpackb(raw, raw=False)
                     logger.debug("[BINARY→MSGPACK] %s", payload)
-                    if isinstance(payload, dict) and "symbol" in payload:
+                    # PO sends binary as list: ["updateStream", {asset, at, time, dir}]
+                    if isinstance(payload, list) and len(payload) >= 2:
+                        event_in_payload = payload[0]
+                        data = payload[1]
+                        if event_in_payload == "updateStream" and isinstance(data, dict):
+                            q = self._extract_quote(data)
+                            if q:
+                                self._successful_decoder = "msgpack"
+                                return q
+                    # Also try dict directly
+                    if isinstance(payload, dict):
                         q = self._extract_quote(payload)
                         if q:
                             self._successful_decoder = "msgpack"
                             return q
-                    if isinstance(payload, (list, tuple)) and len(payload) >= 2:
-                        sym = str(payload[0])
-                        price = float(payload[1])
-                        ts = int(payload[2]) if len(payload) > 2 else int(_time.time())
-                        if ts > 2_000_000_000:
-                            ts = ts // 1000
-                        if abs(ts - _time.time()) < 300:
-                            logger.info("Signal extracted via msgpack: symbol=%s price=%s", sym, price)
-                            self._successful_decoder = "msgpack"
-                            return Quote(symbol=sym, price=price, timestamp=ts)
                 except Exception:
                     pass
 
@@ -138,23 +142,47 @@ class QuoteDecoder:
         return None
 
     def _extract_quote(self, payload: dict) -> Optional[Quote]:
+        """Extract Quote from PO's updateStream payload.
+        
+        PO field names: 'asset' (symbol), 'at' (price), 'time' (unix ts), 'dir' (direction)
+        Fallback to legacy: 'symbol', 'price', 'timestamp'
+        """
         import time
         try:
-            ts = int(payload.get("timestamp", 0))
+            # Symbol: PO uses 'asset', fallback to 'symbol' or 'active'
+            symbol = (
+                payload.get("asset")
+                or payload.get("symbol")
+                or str(payload.get("active", ""))
+            )
+            if not symbol:
+                return None
+
+            # Price: PO uses 'at', fallback to 'price', 'value', 'p'
+            price = (
+                payload.get("at")
+                or payload.get("price")
+                or payload.get("value")
+                or payload.get("p")
+            )
+            if price is None:
+                return None
+
+            # Timestamp: PO uses 'time', fallback to 'timestamp'
+            ts = int(payload.get("time") or payload.get("timestamp") or 0)
             if ts <= 0:
                 ts = int(time.time())
-            elif ts > 2000000000:
-                ts = int(ts / 1000)
+            elif ts > 2_000_000_000:
+                ts = ts // 1000
 
             if abs(ts - time.time()) > 300:
                 logger.warning("Quote timestamp %d out of bounds, dropping.", ts)
                 return None
 
-            return Quote(
-                symbol=str(payload["symbol"]),
-                price=float(payload["price"]),
-                timestamp=ts,
-            )
+            q = Quote(symbol=str(symbol), price=float(price), timestamp=ts)
+            logger.info("Quote decoded: %s @ %.5f (ts=%d)", q.symbol, q.price, q.timestamp)
+            return q
+
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "Quote extraction failed: %s | payload=%s", exc, str(payload)[:200]

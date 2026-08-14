@@ -84,9 +84,11 @@ class EventsCollector(SocketIOClient):
                 break
 
     async def on_sio_text_event(self, event: str, payload: any, recv_ts: float) -> None:
-        if event == "auth/success":
+        if event == "successauth":
             logger.info("%s auth success! Subscribing to %s …", self.name, self.symbol)
             await self._subscribe()
+        elif event == "updateBalance":
+            logger.debug("%s balance update received", self.name)
         else:
             quotes = self._decoder.decode_text_event(event, payload)
             for quote in quotes:
