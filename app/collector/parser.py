@@ -36,33 +36,6 @@ class QuoteDecoder:
                 q = self._extract_quote(payload)
                 return [q] if q else []
 
-            case "user_ready":
-                logger.info("SIO ← user_ready | user_id=%s", payload.get("id") if isinstance(payload, dict) else "?")
-                return []
-
-            case "chat_room_list":
-                # Initial snapshot: extract ALL signals from ALL rooms
-                logger.info("SIO ← chat_room_list (snapshot received)")
-                quotes = []
-                if isinstance(payload, dict) and "list" in payload:
-                    for room in payload["list"]:
-                        q = self._extract_signal_from_room(room)
-                        if q:
-                            quotes.append(q)
-                if quotes:
-                    logger.info("chat_room_list snapshot: extracted %d quotes", len(quotes))
-                return quotes
-
-            case "chat_room_list_update":
-                # Real-time update for one room
-                logger.debug("SIO ← chat_room_list_update")
-                q = self._extract_signal_from_room(payload)
-                return [q] if q else []
-
-            case event if event.startswith("auth/"):
-                logger.warning("SIO ← %s | %s", event, payload)
-                return []
-
             case _:
                 logger.debug("SIO text event '%s' — ignored", event_name)
                 return []
@@ -163,59 +136,6 @@ class QuoteDecoder:
                 )
 
         return None
-
-    def _extract_signal_from_room(self, room: dict | None) -> Optional[Quote]:
-        if not isinstance(room, dict):
-            return None
-
-        logger.debug("chat_room payload: %s", str(room)[:400])
-
-        try:
-            content = room.get("message_content")
-            if isinstance(content, str):
-                import json as _json
-                content = _json.loads(content)
-
-            if isinstance(content, dict):
-                signal = content.get("signal") or {}
-            else:
-                msg = room.get("message") or {}
-                if isinstance(msg, str):
-                    import json as _json
-                    msg = _json.loads(msg)
-                content2 = msg.get("message_content") if isinstance(msg, dict) else {}
-                if isinstance(content2, str):
-                    import json as _json
-                    content2 = _json.loads(content2)
-                signal = (content2 or {}).get("signal") or {} if isinstance(content2, dict) else {}
-
-            if not signal:
-                return None
-
-            logger.debug(
-                "Signal extracted: symbol=%s price=%s",
-                signal.get("symbol"), signal.get("price", signal.get("value")),
-            )
-            ts = int(signal.get("timestamp", signal.get("time", 0)))
-            if ts <= 0:
-                import time
-                ts = int(time.time())
-            elif ts > 2000000000:
-                ts = int(ts / 1000)
-                
-            import time
-            if abs(ts - time.time()) > 300:
-                logger.warning("Signal timestamp %d out of bounds, dropping.", ts)
-                return None
-
-            return Quote(
-                symbol=str(signal["symbol"]),
-                price=float(signal.get("price", signal.get("value", 0))),
-                timestamp=ts,
-            )
-        except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            logger.debug("Signal extraction failed: %s | room=%s", exc, str(room)[:300])
-            return None
 
     def _extract_quote(self, payload: dict) -> Optional[Quote]:
         import time

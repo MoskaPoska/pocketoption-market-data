@@ -3,12 +3,12 @@ Market Data Provider — FastAPI Application Entry Point
 ======================================================
 
 Startup sequence:
-  1. Load cookies from storage_state.json   (SessionManager)
+  1. Load cookies from Redis / env          (SessionManager)
   2. Connect to Redis                        (RedisClient)
-  3. Launch WebSocket collector as a task    (DirectCollector)
+  3. Launch EventsCollector per symbol       (demo-api-eu.po.market)
 
 Shutdown sequence (reverse):
-  1. Stop collector
+  1. Stop collectors
   2. Close Redis
 """
 
@@ -23,7 +23,6 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.session.manager import SessionManager
-from app.collector.engine import DirectCollector
 from app.collector.events_collector import EventsCollector
 from app.broker.redis_client import RedisClient
 from app.gateway.ws_handler import WebSocketGateway
@@ -80,15 +79,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("No symbols specified in SUBSCRIBE_SYMBOL!")
         
     for symbol in symbols:
-        direct = DirectCollector(session_manager, quote_queue, symbol)
-        events = EventsCollector(session_manager, quote_queue, symbol)
-        active_collectors.extend([direct, events])
-        
+        collector = EventsCollector(session_manager, quote_queue, symbol)
+        active_collectors.append(collector)
         collector_tasks.append(
-            asyncio.create_task(direct.start(), name=f"direct-{symbol}")
-        )
-        collector_tasks.append(
-            asyncio.create_task(events.start(), name=f"events-{symbol}")
+            asyncio.create_task(collector.start(), name=f"events-{symbol}")
         )
 
     # Cookie expiry watcher
