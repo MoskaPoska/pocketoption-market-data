@@ -45,10 +45,11 @@ class EventsCollector(SocketIOClient):
         await super().stop()
 
     async def on_sio_connect(self) -> None:
-        """Triggered when Socket.IO is connected. Send auth and subscribe."""
+        """Triggered when Socket.IO is connected. Send auth."""
         cookies = self.session.get_cookies_dict()
         session_id = cookies.get("ci_session", "")
-        uid = cookies.get("po_uuid", "")
+        # uid must be a numeric user ID, not po_uuid
+        uid = settings.SOCKET_USER_ID
 
         auth_payload = json.dumps(
             [
@@ -66,8 +67,8 @@ class EventsCollector(SocketIOClient):
         )
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
-            logger.info("%s sent auth → uid=%s", self.name, uid)
-            # NOTE: subfor + changeSymbol are sent ONLY after receiving auth/success
+            logger.info("%s sent auth → uid=%s session_len=%d", self.name, uid, len(session_id))
+            # NOTE: subfor + changeSymbol are sent ONLY after receiving successauth
 
     async def _ping_loop(self) -> None:
         """Continuously send application-level pings to keep PO stream alive."""
