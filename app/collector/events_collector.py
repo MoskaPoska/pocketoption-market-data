@@ -67,17 +67,7 @@ class EventsCollector(SocketIOClient):
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
             logger.info("%s sent auth → uid=%s", self.name, uid)
-
-            subfor_msg = json.dumps(["subfor", self.symbol], separators=(",", ":"))
-            await self.ws.send_str(f"42{subfor_msg}")
-            
-            sub_msg = json.dumps(["changeSymbol", {"asset": self.symbol, "period": 5}], separators=(",", ":"))
-            await self.ws.send_str(f"42{sub_msg}")
-            logger.info("%s sent subfor and changeSymbol", self.name)
-            
-            if self._ping_task and not self._ping_task.done():
-                self._ping_task.cancel()
-            self._ping_task = asyncio.create_task(self._ping_loop())
+            # NOTE: subfor + changeSymbol are sent ONLY after receiving auth/success
 
     async def _ping_loop(self) -> None:
         """Continuously send application-level pings to keep PO stream alive."""
@@ -95,11 +85,30 @@ class EventsCollector(SocketIOClient):
 
     async def on_sio_text_event(self, event: str, payload: any, recv_ts: float) -> None:
         if event == "auth/success":
-            logger.info("%s auth success!", self.name)
+            logger.info("%s auth success! Subscribing to %s …", self.name, self.symbol)
+            await self._subscribe()
         else:
             quotes = self._decoder.decode_text_event(event, payload)
             for quote in quotes:
                 await self._publish(quote, recv_ts)
+
+    async def _subscribe(self) -> None:
+        """Send subfor + changeSymbol AFTER auth/success is confirmed."""
+        if not self.ws or self.ws.closed:
+            return
+        subfor_msg = json.dumps(["subfor", self.symbol], separators=(",", ":"))
+        await self.ws.send_str(f"42{subfor_msg}")
+
+        sub_msg = json.dumps(
+            ["changeSymbol", {"asset": self.symbol, "period": 5}],
+            separators=(",", ":")
+        )
+        await self.ws.send_str(f"42{sub_msg}")
+        logger.info("%s sent subfor + changeSymbol → %s", self.name, self.symbol)
+
+        if self._ping_task and not self._ping_task.done():
+            self._ping_task.cancel()
+        self._ping_task = asyncio.create_task(self._ping_loop())
 
     async def on_sio_binary_event(self, event: str, attachments: list[bytes], recv_ts: float) -> None:
         quote = self._decoder.decode_binary_event(event, attachments)
