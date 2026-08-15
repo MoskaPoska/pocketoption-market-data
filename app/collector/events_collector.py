@@ -44,6 +44,15 @@ class EventsCollector(SocketIOClient):
             self._ping_task.cancel()
         await super().stop()
 
+    async def on_sio_disconnect(self) -> None:
+        """Server kicked us — force session reload before next reconnect."""
+        logger.warning("%s session rejected — forcing session reload", self.name)
+        try:
+            await self.session.reload()
+            logger.info("%s session reloaded successfully", self.name)
+        except Exception as exc:
+            logger.error("%s session reload failed: %s", self.name, exc)
+
     async def on_sio_connect(self) -> None:
         """Triggered when Socket.IO is connected. Send auth."""
         cookies = self.session.get_cookies_dict()
