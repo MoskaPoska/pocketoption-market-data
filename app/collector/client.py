@@ -183,10 +183,11 @@ class SocketIOClient(BaseWebSocketClient):
                 await self.on_sio_connect()
             elif sio_type == "1":
                 # SIO DISCONNECT — server kicked us, almost always means session expired
-                logger.warning("%s ← SIO DISCONNECT (41) — session rejected by server! Reloading session...", self.name)
+                logger.warning("%s ← SIO DISCONNECT (41) — session rejected! Reloading session...", self.name)
                 await self.on_sio_disconnect()
                 self._reconnect_attempt += 1
-                break
+                if self.ws:
+                    await self.ws.close()
             elif sio_type == "2":
                 try:
                     packet = json.loads(sio_payload[1:])
@@ -201,7 +202,8 @@ class SocketIOClient(BaseWebSocketClient):
                 # CONNECT_ERROR — server rejected our SIO connect
                 logger.error("%s ← SIO CONNECT_ERROR: %s", self.name, data[:200])
                 self._reconnect_attempt += 1
-                break
+                if self.ws:
+                    await self.ws.close()
             elif sio_type == "5":
                 self._handle_binary_announcement(sio_payload)
             else:
