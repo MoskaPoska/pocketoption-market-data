@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # If set, TwelveDataCollector is used instead of EventsCollector.
     TWELVEDATA_API_KEY: str = ""
 
+    # ── FlareSolverr (Cloudflare / WAF bypass for automated session retrieval)
+    # E.g. "http://flaresolverr.railway.internal:8191"
+    FLARESOLVERR_URL: str = "http://localhost:8191"
+
     @property
     def subscribe_symbols_list(self) -> list[str]:
         """Returns SUBSCRIBE_SYMBOL as a list of strings."""

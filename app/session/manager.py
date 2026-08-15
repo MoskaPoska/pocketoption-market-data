@@ -138,63 +138,68 @@ class SessionManager:
         This solves the IP-lock problem: the new ci_session will have Railway's IP,
         so demo-api-eu.po.market will accept our auth.
         """
-        autologin = self._cookies.get("autologin", "")
-        if not autologin:
-            logger.warning("auto_refresh_session: no autologin cookie available")
-            return False
-
+        # ── FlareSolverr integration ──
+        # We don't send any cookies. We want a completely fresh guest session.
         url = "https://pocketoption.com/en/cabinet/demo-quick-high-low/"
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        fs_url = f"{settings.FLARESOLVERR_URL.rstrip('/')}/v1"
+        
+        logger.info("auto_refresh_session: Calling FlareSolverr at %s", fs_url)
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 60000,
+            # Let FlareSolverr navigate and solve CF. We only need the resulting cookies.
         }
-        # Send all cookies EXCEPT ci_session (which has the wrong IP and causes conflict).
-        # PO might require po_uuid or other cookies to process the autologin.
-        cookies = {k: v for k, v in self._cookies.items() if k != "ci_session"}
-        if "autologin" not in cookies:
-            logger.warning("auto_refresh_session: no autologin cookie available")
-            return False
 
         try:
-            from curl_cffi.requests import AsyncSession
-            
-            async with AsyncSession(impersonate="chrome110", headers=headers, timeout=15) as s:
-                resp = await s.get(
-                    url,
-                    cookies=cookies,
-                    allow_redirects=True,
-                )
-                logger.info(
-                    "auto_refresh_session: GET %s → status=%d url=%s",
-                    url, resp.status_code, str(resp.url)[:80],
-                )
-                # Extract ci_session from response cookies
-                new_ci = resp.cookies.get("ci_session")
-                if new_ci:
-                    self._cookies["ci_session"] = new_ci
-                    # Try to extract and log the embedded IP to verify
-                    try:
-                        decoded = urllib.parse.unquote(new_ci)
-                        import re
-                        m = re.search(r'"ip_address";s:\d+:"([^"]+)"', decoded)
-                        ip = m.group(1) if m else "unknown"
-                    except Exception:
-                        ip = "?"
-                    logger.info(
-                        "auto_refresh_session ✓ new ci_session obtained | ip_in_session=%s",
-                        ip,
-                    )
-                    return True
-                logger.warning(
-                    "auto_refresh_session: no ci_session in response cookies. "
-                    "autologin cookie may be expired or invalid."
-                )
-                return False
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(fs_url, json=payload, timeout=70) as resp:
+                    if resp.status != 200:
+                        logger.error("FlareSolverr error: HTTP %d", resp.status)
+                        return False
+                    
+                    data = await resp.json()
+                    
+                    if data.get("status") != "ok":
+                        logger.error("FlareSolverr failed: %s", data.get("message"))
+                        return False
+                    
+                    solution = data.get("solution", {})
+                    fs_cookies = solution.get("cookies", [])
+                    fs_ua = solution.get("userAgent")
+                    
+                    if fs_ua:
+                        self._cookies["flare_user_agent"] = fs_ua
+                        logger.info("auto_refresh_session: Extracted User-Agent: %s", fs_ua)
+                    
+                    # Extract ci_session
+                    new_ci = None
+                    for c in fs_cookies:
+                        name = c.get("name")
+                        val = c.get("value")
+                        if name in ("ci_session", "po_uuid", "cf_clearance"):
+                            self._cookies[name] = val
+                            if name == "ci_session":
+                                new_ci = val
+
+                    if new_ci:
+                        try:
+                            decoded = urllib.parse.unquote(new_ci)
+                            import re
+                            m = re.search(r'"ip_address";s:\d+:"([^"]+)"', decoded)
+                            ip = m.group(1) if m else "unknown"
+                        except Exception:
+                            ip = "?"
+                        logger.info(
+                            "auto_refresh_session ✓ new guest ci_session obtained | ip_in_session=%s",
+                            ip,
+                        )
+                        return True
+                    
+                    logger.warning("auto_refresh_session: no ci_session found in FlareSolverr response")
+                    return False
+
         except Exception as exc:
             logger.error("auto_refresh_session failed: %s", exc)
             return False

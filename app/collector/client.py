@@ -57,9 +57,10 @@ class BaseWebSocketClient:
 
     async def _connect_and_run(self) -> None:
         cookies = self.session.get_cookie_header()
+        flare_ua = self.session._cookies.get("flare_user_agent")
         headers = {
             "Origin": self.origin,
-            "User-Agent": (
+            "User-Agent": flare_ua or (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/126.0.0.0 Safari/537.36"
