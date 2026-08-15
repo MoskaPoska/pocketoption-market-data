@@ -55,19 +55,24 @@ class EventsCollector(SocketIOClient):
 
     async def on_sio_connect(self) -> None:
         """Triggered when Socket.IO is connected. Send auth."""
-        cookies = self.session.get_cookies_dict()
-        session_id = cookies.get("ci_session", "")
-        # uid must be a numeric user ID, not po_uuid
-        uid = settings.SOCKET_USER_ID
+        # PO demo-api uses a SHORT session token (26 chars from DevTools WS messages),
+        # NOT the full ci_session cookie value (433 chars).
+        session_token = settings.PO_SESSION_TOKEN
+        if not session_token:
+            # Fallback: try ci_session (will likely fail, but better than nothing)
+            cookies = self.session.get_cookies_dict()
+            session_token = cookies.get("ci_session", "")
+            logger.warning("%s PO_SESSION_TOKEN not set — falling back to ci_session", self.name)
 
+        uid = settings.SOCKET_USER_ID
         auth_payload = json.dumps(
             [
                 "auth",
                 {
-                    "session": session_id,
+                    "session": session_token,
                     "isDemo": 1 if settings.SUBSCRIBE_IS_DEMO else 0,
                     "uid": uid,
-                    "platform": 1,
+                    "platform": 2,          # browser sends platform=2, NOT 1
                     "isFastHistory": True,
                     "isOptimized": True
                 }
@@ -76,8 +81,8 @@ class EventsCollector(SocketIOClient):
         )
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
-            logger.info("%s sent auth → uid=%s session_len=%d", self.name, uid, len(session_id))
-            # NOTE: subfor + changeSymbol are sent ONLY after receiving successauth
+            logger.info("%s sent auth → uid=%s session_len=%d", self.name, uid, len(session_token))
+            # NOTE: subscribe is sent ONLY after receiving successauth
 
     async def _ping_loop(self) -> None:
         """Continuously send application-level pings to keep PO stream alive."""
@@ -105,24 +110,34 @@ class EventsCollector(SocketIOClient):
                 await self._publish(quote, recv_ts)
 
     async def _subscribe(self) -> None:
-        """Send subfor + changeSymbol AFTER auth/success is confirmed."""
+        """Send changeSymbol + subfor AFTER successauth is confirmed.
+        Browser order: changeSymbol first, then subfor.
+        """
         if not self.ws or self.ws.closed:
             return
-        subfor_msg = json.dumps(["subfor", self.symbol], separators=(",", ":"))
-        await self.ws.send_str(f"42{subfor_msg}")
-
+        # 1. changeSymbol first (browser does it this way)
         sub_msg = json.dumps(
             ["changeSymbol", {"asset": self.symbol, "period": 5}],
             separators=(",", ":")
         )
         await self.ws.send_str(f"42{sub_msg}")
-        logger.info("%s sent subfor + changeSymbol → %s", self.name, self.symbol)
+
+        # 2. subfor second
+        subfor_msg = json.dumps(["subfor", self.symbol], separators=(",", ":"))
+        await self.ws.send_str(f"42{subfor_msg}")
+
+        logger.info("%s sent changeSymbol + subfor → %s", self.name, self.symbol)
 
         if self._ping_task and not self._ping_task.done():
             self._ping_task.cancel()
         self._ping_task = asyncio.create_task(self._ping_loop())
 
     async def on_sio_binary_event(self, event: str, attachments: list[bytes], recv_ts: float) -> None:
+        # successauth comes as a BINARY event (451-), not text (42)
+        if event == "successauth":
+            logger.info("%s ← binary successauth! Subscribing to %s …", self.name, self.symbol)
+            await self._subscribe()
+            return
         quote = self._decoder.decode_binary_event(event, attachments)
         if quote:
             await self._publish(quote, recv_ts)

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     SOCKET_USER_ID: int = 0          # your numeric user ID
     SOCKET_SECRET: str = ""          # session secret from user_init message
 
+    # Short session token for demo-api-eu.po.market auth.
+    # Get it from: Browser DevTools → Network → WS → demo-api-eu.po.market
+    # → Messages → first ↑ message starting with 42["auth" → copy "session" value
+    PO_SESSION_TOKEN: str = ""
+
     # Symbol to subscribe to for continuous price ticks (changeSymbol event)
     # Set to empty string to skip — only chat_room_list will be used.
     # Can be a comma-separated list of symbols: "EURUSD_otc,GBPUSD_otc"
