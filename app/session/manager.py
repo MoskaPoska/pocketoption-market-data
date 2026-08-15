@@ -17,7 +17,10 @@ Cookie object fields used:
 import json
 import logging
 import time
+import urllib.parse
 from pathlib import Path
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +126,75 @@ class SessionManager:
         """Reload cookies from disk/Redis (call after external session refresh)."""
         logger.info("Reloading session …")
         await self.load()
+
+    async def auto_refresh_session(self) -> bool:
+        """Use the autologin cookie to obtain a fresh ci_session tied to THIS server's IP.
+
+        Flow:
+          1. GET pocketoption.com with ONLY the autologin cookie (not ci_session)
+          2. PO logs us in automatically → returns new ci_session for current IP
+          3. Store the new ci_session in self._cookies
+
+        This solves the IP-lock problem: the new ci_session will have Railway's IP,
+        so demo-api-eu.po.market will accept our auth.
+        """
+        autologin = self._cookies.get("autologin", "")
+        if not autologin:
+            logger.warning("auto_refresh_session: no autologin cookie available")
+            return False
+
+        url = "https://pocketoption.com/en/cabinet/demo-quick-high-low/"
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        }
+        # Send ONLY autologin cookie — ci_session has the wrong IP and would conflict
+        cookies = {"autologin": autologin}
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(headers=headers) as http:
+                async with http.get(
+                    url,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                ) as resp:
+                    logger.info(
+                        "auto_refresh_session: GET %s → status=%d url=%s",
+                        url, resp.status, str(resp.url)[:80],
+                    )
+                    # Extract ci_session from response cookies
+                    new_ci = resp.cookies.get("ci_session")
+                    if new_ci:
+                        raw_val = new_ci.value
+                        self._cookies["ci_session"] = raw_val
+                        # Try to extract and log the embedded IP to verify
+                        try:
+                            decoded = urllib.parse.unquote(raw_val)
+                            import re
+                            m = re.search(r'"ip_address";s:\d+:"([^"]+)"', decoded)
+                            ip = m.group(1) if m else "unknown"
+                        except Exception:
+                            ip = "?"
+                        logger.info(
+                            "auto_refresh_session ✓ new ci_session obtained | ip_in_session=%s",
+                            ip,
+                        )
+                        return True
+                    logger.warning(
+                        "auto_refresh_session: no ci_session in response cookies. "
+                        "autologin cookie may be expired or invalid."
+                    )
+                    return False
+        except Exception as exc:
+            logger.error("auto_refresh_session failed: %s", exc)
+            return False
 
     @property
     def is_loaded(self) -> bool:

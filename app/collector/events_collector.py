@@ -45,13 +45,16 @@ class EventsCollector(SocketIOClient):
         await super().stop()
 
     async def on_sio_disconnect(self) -> None:
-        """Server kicked us — force session reload before next reconnect."""
-        logger.warning("%s session rejected — forcing session reload", self.name)
-        try:
-            await self.session.reload()
-            logger.info("%s session reloaded successfully", self.name)
-        except Exception as exc:
-            logger.error("%s session reload failed: %s", self.name, exc)
+        """Server rejected us (41) — refresh session via autologin, then reconnect."""
+        logger.warning("%s session rejected — running auto_refresh_session …", self.name)
+        ok = await self.session.auto_refresh_session()
+        if not ok:
+            # Fallback: plain reload from env var
+            logger.warning("%s auto_refresh failed, falling back to reload", self.name)
+            try:
+                await self.session.reload()
+            except Exception as exc:
+                logger.error("%s session reload failed: %s", self.name, exc)
 
     async def on_sio_connect(self) -> None:
         """Triggered when Socket.IO is connected. Send auth.

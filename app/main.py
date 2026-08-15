@@ -68,6 +68,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await redis_client.connect()    # open Redis pool first
     await session_manager.load()    # parse storage_state.json or read from Redis
 
+    # Auto-refresh ci_session via autologin so it contains THIS server's IP.
+    # This is the key to bypassing demo-api-eu.po.market's IP-lock.
+    logger.info("Running auto_refresh_session to bind ci_session to server IP …")
+    ok = await session_manager.auto_refresh_session()
+    if ok:
+        logger.info("auto_refresh_session ✓ — ci_session now has server IP")
+    else:
+        logger.warning("auto_refresh_session failed — will retry on first auth rejection")
+
     # Start the publisher task
     publisher_task = asyncio.create_task(
         redis_publisher_task(quote_queue, redis_client), name="redis-publisher"
