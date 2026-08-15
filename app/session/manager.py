@@ -138,17 +138,20 @@ class SessionManager:
         This solves the IP-lock problem: the new ci_session will have Railway's IP,
         so demo-api-eu.po.market will accept our auth.
         """
-        # ── FlareSolverr integration ──
-        # We don't send any cookies. We want a completely fresh guest session.
-        url = "https://pocketoption.com/en/cabinet/demo-quick-high-low/"
-        fs_url = f"{settings.FLARESOLVERR_URL.rstrip('/')}/v1"
-        
-        logger.info("auto_refresh_session: Calling FlareSolverr at %s", fs_url)
+        # Pass the autologin cookie to FlareSolverr so PO logs us in
+        # and generates a new ci_session tied to the VPS IP.
+        req_cookies = []
+        if "autologin" in self._cookies:
+            req_cookies.append({"name": "autologin", "value": self._cookies["autologin"], "domain": ".pocketoption.com"})
+        if "po_uuid" in self._cookies:
+            req_cookies.append({"name": "po_uuid", "value": self._cookies["po_uuid"], "domain": ".pocketoption.com"})
+
+        logger.info("auto_refresh_session: Calling FlareSolverr at %s with %d cookies", fs_url, len(req_cookies))
         payload = {
             "cmd": "request.get",
             "url": url,
             "maxTimeout": 60000,
-            # Let FlareSolverr navigate and solve CF. We only need the resulting cookies.
+            "cookies": req_cookies
         }
 
         try:
