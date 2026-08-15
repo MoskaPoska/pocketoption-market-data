@@ -88,11 +88,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if not symbols:
         logger.warning("No symbols specified in SUBSCRIBE_SYMBOL!")
 
-    use_twelvedata = bool(settings.TWELVEDATA_API_KEY)
+    # User requested to disable TwelveData/Binance for now and focus purely on PO.
+    use_twelvedata = False 
     if use_twelvedata:
         logger.info("TWELVEDATA_API_KEY set → using TwelveDataCollector (real EURUSD feed)")
     else:
-        logger.info("No TWELVEDATA_API_KEY → using EventsCollector (PO WebSocket)")
+        logger.info("Using EventsCollector (PO WebSocket) as requested")
 
     for symbol in symbols:
         if use_twelvedata:
