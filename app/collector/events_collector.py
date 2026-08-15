@@ -54,35 +54,29 @@ class EventsCollector(SocketIOClient):
             logger.error("%s session reload failed: %s", self.name, exc)
 
     async def on_sio_connect(self) -> None:
-        """Triggered when Socket.IO is connected. Send auth."""
-        # PO demo-api uses a SHORT session token (26 chars from DevTools WS messages),
-        # NOT the full ci_session cookie value (433 chars).
-        session_token = settings.PO_SESSION_TOKEN
-        if not session_token:
-            # Fallback: try ci_session (will likely fail, but better than nothing)
-            cookies = self.session.get_cookies_dict()
-            session_token = cookies.get("ci_session", "")
-            logger.warning("%s PO_SESSION_TOKEN not set — falling back to ci_session", self.name)
-
+        """Triggered when Socket.IO is connected. Send auth.
+        events-po.com uses sessionToken (= SOCKET_SECRET), not ci_session.
+        Format confirmed from browser DevTools screenshot.
+        """
+        session_token = settings.SOCKET_SECRET  # 32-char hex, same token as chat-po.site
         uid = settings.SOCKET_USER_ID
+
         auth_payload = json.dumps(
             [
                 "auth",
                 {
-                    "session": session_token,
-                    "isDemo": 1 if settings.SUBSCRIBE_IS_DEMO else 0,
+                    "sessionToken": session_token,
                     "uid": uid,
-                    "platform": 2,          # browser sends platform=2, NOT 1
-                    "isFastHistory": True,
-                    "isOptimized": True
+                    "lang": "ru",
+                    "currentUrl": "cabinet/demo-quick-high-low",
+                    "isChart": 1,
                 }
             ],
             separators=(",", ":")
         )
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
-            logger.info("%s sent auth → uid=%s session_len=%d", self.name, uid, len(session_token))
-            # NOTE: subscribe is sent ONLY after receiving successauth
+            logger.info("%s sent auth → uid=%s token_len=%d", self.name, uid, len(session_token))
 
     async def _ping_loop(self) -> None:
         """Continuously send application-level pings to keep PO stream alive."""
@@ -99,8 +93,9 @@ class EventsCollector(SocketIOClient):
                 break
 
     async def on_sio_text_event(self, event: str, payload: any, recv_ts: float) -> None:
-        if event == "successauth":
-            logger.info("%s auth success! Subscribing to %s …", self.name, self.symbol)
+        # events-po.com sends text "auth/success", demo-api sends binary "successauth"
+        if event in ("successauth", "auth/success"):
+            logger.info("%s ← auth success ('%s')! Subscribing to %s …", self.name, event, self.symbol)
             await self._subscribe()
         elif event == "updateBalance":
             logger.debug("%s balance update received", self.name)
