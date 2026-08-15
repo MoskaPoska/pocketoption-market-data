@@ -157,41 +157,40 @@ class SessionManager:
         cookies = {"autologin": autologin}
 
         try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(headers=headers) as http:
-                async with http.get(
+            from curl_cffi.requests import AsyncSession
+            
+            async with AsyncSession(impersonate="chrome110", headers=headers, timeout=15) as s:
+                resp = await s.get(
                     url,
                     cookies=cookies,
-                    timeout=timeout,
                     allow_redirects=True,
-                ) as resp:
+                )
+                logger.info(
+                    "auto_refresh_session: GET %s → status=%d url=%s",
+                    url, resp.status_code, str(resp.url)[:80],
+                )
+                # Extract ci_session from response cookies
+                new_ci = resp.cookies.get("ci_session")
+                if new_ci:
+                    self._cookies["ci_session"] = new_ci
+                    # Try to extract and log the embedded IP to verify
+                    try:
+                        decoded = urllib.parse.unquote(new_ci)
+                        import re
+                        m = re.search(r'"ip_address";s:\d+:"([^"]+)"', decoded)
+                        ip = m.group(1) if m else "unknown"
+                    except Exception:
+                        ip = "?"
                     logger.info(
-                        "auto_refresh_session: GET %s → status=%d url=%s",
-                        url, resp.status, str(resp.url)[:80],
+                        "auto_refresh_session ✓ new ci_session obtained | ip_in_session=%s",
+                        ip,
                     )
-                    # Extract ci_session from response cookies
-                    new_ci = resp.cookies.get("ci_session")
-                    if new_ci:
-                        raw_val = new_ci.value
-                        self._cookies["ci_session"] = raw_val
-                        # Try to extract and log the embedded IP to verify
-                        try:
-                            decoded = urllib.parse.unquote(raw_val)
-                            import re
-                            m = re.search(r'"ip_address";s:\d+:"([^"]+)"', decoded)
-                            ip = m.group(1) if m else "unknown"
-                        except Exception:
-                            ip = "?"
-                        logger.info(
-                            "auto_refresh_session ✓ new ci_session obtained | ip_in_session=%s",
-                            ip,
-                        )
-                        return True
-                    logger.warning(
-                        "auto_refresh_session: no ci_session in response cookies. "
-                        "autologin cookie may be expired or invalid."
-                    )
-                    return False
+                    return True
+                logger.warning(
+                    "auto_refresh_session: no ci_session in response cookies. "
+                    "autologin cookie may be expired or invalid."
+                )
+                return False
         except Exception as exc:
             logger.error("auto_refresh_session failed: %s", exc)
             return False
