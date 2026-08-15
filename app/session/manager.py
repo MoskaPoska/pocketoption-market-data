@@ -138,6 +138,9 @@ class SessionManager:
         This solves the IP-lock problem: the new ci_session will have Railway's IP,
         so demo-api-eu.po.market will accept our auth.
         """
+        url = "https://pocketoption.com/en/cabinet/demo-quick-high-low/"
+        fs_url = f"{settings.FLARESOLVERR_URL.rstrip('/')}/v1"
+
         # Pass the autologin cookie to FlareSolverr so PO logs us in
         # and generates a new ci_session tied to the VPS IP.
         req_cookies = []
