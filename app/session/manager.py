@@ -197,7 +197,8 @@ class SessionManager:
                         )
                         return True
                     
-                    logger.warning("auto_refresh_session: no ci_session found in FlareSolverr response")
+                    cookie_names = [c.get("name") for c in fs_cookies]
+                    logger.warning("auto_refresh_session: no ci_session found. Returned cookies: %s", cookie_names)
                     return False
 
         except Exception as exc:
