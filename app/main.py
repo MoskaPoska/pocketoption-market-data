@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.session.manager import SessionManager
 from app.collector.events_collector import EventsCollector
+from app.collector.twelvedata_collector import TwelveDataCollector
 from app.broker.redis_client import RedisClient
 from app.gateway.ws_handler import WebSocketGateway
 from app.monitor.cookie_watcher import CookieWatcher
@@ -86,12 +87,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     symbols = settings.subscribe_symbols_list
     if not symbols:
         logger.warning("No symbols specified in SUBSCRIBE_SYMBOL!")
-        
+
+    use_twelvedata = bool(settings.TWELVEDATA_API_KEY)
+    if use_twelvedata:
+        logger.info("TWELVEDATA_API_KEY set → using TwelveDataCollector (real EURUSD feed)")
+    else:
+        logger.info("No TWELVEDATA_API_KEY → using EventsCollector (PO WebSocket)")
+
     for symbol in symbols:
-        collector = EventsCollector(session_manager, quote_queue, symbol)
+        if use_twelvedata:
+            collector = TwelveDataCollector(
+                api_key=settings.TWELVEDATA_API_KEY,
+                quote_queue=quote_queue,
+                symbol=symbol,
+            )
+        else:
+            collector = EventsCollector(session_manager, quote_queue, symbol)
         active_collectors.append(collector)
         collector_tasks.append(
-            asyncio.create_task(collector.start(), name=f"events-{symbol}")
+            asyncio.create_task(collector.start(), name=f"collector-{symbol}")
         )
 
     # Cookie expiry watcher

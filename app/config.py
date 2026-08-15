@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     SUBSCRIBE_SYMBOL: str = "EURUSD_otc"
     SUBSCRIBE_IS_DEMO: int = 1        # 1 = demo, 0 = real
 
+    # ── Twelve Data (external EURUSD feed, no IP restrictions) ────────────────
+    # Free API key: https://twelvedata.com → Sign Up → API Keys
+    # If set, TwelveDataCollector is used instead of EventsCollector.
+    TWELVEDATA_API_KEY: str = ""
+
     @property
     def subscribe_symbols_list(self) -> list[str]:
         """Returns SUBSCRIBE_SYMBOL as a list of strings."""
