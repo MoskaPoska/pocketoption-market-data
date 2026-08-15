@@ -113,11 +113,13 @@ class BaseWebSocketClient:
                 break
             recv_ts = time.monotonic()
             if msg.type == aiohttp.WSMsgType.TEXT:
+                logger.debug("%s ← RAW TEXT: %s", self.name, msg.data[:200])
                 await self.on_ws_text(msg.data, recv_ts)
             elif msg.type == aiohttp.WSMsgType.BINARY:
+                logger.debug("%s ← RAW BINARY len=%d hex=%s", self.name, len(msg.data), msg.data[:32].hex())
                 await self.on_ws_binary(msg.data, recv_ts)
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
-                logger.warning("%s server closed WS or error", self.name)
+                logger.warning("%s server closed WS or error: %s", self.name, msg.data)
                 self._reconnect_attempt += 1
                 break
 
@@ -181,11 +183,14 @@ class SocketIOClient(BaseWebSocketClient):
                     if isinstance(packet, list) and len(packet) > 0:
                         event_name = packet[0]
                         payload = packet[1] if len(packet) > 1 else None
+                        logger.info("%s ← SIO event: '%s'", self.name, event_name)
                         await self.on_sio_text_event(event_name, payload, recv_ts)
                 except Exception as exc:
                     logger.error("%s SIO text parse error: %s | data=%s", self.name, exc, data[:100])
             elif sio_type == "5":
                 self._handle_binary_announcement(sio_payload)
+            else:
+                logger.info("%s ← unhandled SIO type '%s': %s", self.name, sio_type, data[:100])
 
     async def on_ws_binary(self, data: bytes, recv_ts: float) -> None:
         if self._pending_event_name is None:
