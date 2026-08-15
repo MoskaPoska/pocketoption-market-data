@@ -24,6 +24,20 @@ services:
     networks:
       - mdp-net
 
+  # ── FlareSolverr (Cloudflare bypass) ─────────────────────────────────────────
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+    ports:
+      - "8191:8191"
+    networks:
+      - mdp-net
+
   # ── Market Data Provider App ────────────────────────────────────────────────
   app:
     build:
