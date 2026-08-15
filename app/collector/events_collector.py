@@ -55,28 +55,55 @@ class EventsCollector(SocketIOClient):
 
     async def on_sio_connect(self) -> None:
         """Triggered when Socket.IO is connected. Send auth.
-        events-po.com uses sessionToken (= SOCKET_SECRET), not ci_session.
-        Format confirmed from browser DevTools screenshot.
+        demo-api-eu.po.market uses a short session token.
+        We extract session_id from the ci_session PHP-serialized cookie.
         """
-        session_token = settings.SOCKET_SECRET  # 32-char hex, same token as chat-po.site
+        cookies = self.session.get_cookies_dict()
+        ci_session = cookies.get("ci_session", "")
+        session_token = self._parse_session_id(ci_session)
         uid = settings.SOCKET_USER_ID
 
         auth_payload = json.dumps(
             [
                 "auth",
                 {
-                    "sessionToken": session_token,
+                    "session": session_token,
+                    "isDemo": 1 if settings.SUBSCRIBE_IS_DEMO else 0,
                     "uid": uid,
-                    "lang": "ru",
-                    "currentUrl": "cabinet/demo-quick-high-low",
-                    "isChart": 1,
+                    "platform": 2,
+                    "isFastHistory": True,
+                    "isOptimized": True,
                 }
             ],
             separators=(",", ":")
         )
         if self.ws:
             await self.ws.send_str(f"42{auth_payload}")
-            logger.info("%s sent auth → uid=%s token_len=%d", self.name, uid, len(session_token))
+            logger.info(
+                "%s sent auth → uid=%s session='%s...' (len=%d)",
+                self.name, uid, session_token[:8], len(session_token)
+            )
+
+    @staticmethod
+    def _parse_session_id(ci_session: str) -> str:
+        """Extract session_id from PHP-serialized ci_session cookie.
+
+        ci_session URL-decoded format:
+          a:4:{s:10:"session_id";s:32:"XXXXXXX";s:10:"ip_address";...}HMAC
+
+        Returns the raw session_id string, or the raw ci_session as fallback.
+        """
+        import urllib.parse, re
+        try:
+            decoded = urllib.parse.unquote(ci_session)
+            m = re.search(r's:10:"session_id";s:\d+:"([^"]+)"', decoded)
+            if m:
+                sid = m.group(1)
+                logger.debug("Parsed session_id from ci_session: %s", sid)
+                return sid
+        except Exception as exc:
+            logger.warning("Failed to parse ci_session: %s", exc)
+        return ci_session
 
     async def _ping_loop(self) -> None:
         """Continuously send application-level pings to keep PO stream alive."""

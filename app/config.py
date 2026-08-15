@@ -16,9 +16,8 @@ class Settings(BaseSettings):
     )
     SOURCE_ORIGIN: str = "https://chat-po.site"
 
-    # Real-time price feed WebSocket
-    # events-po.com accepts SOCKET_SECRET token (same as chat-po.site)
-    EVENTS_WS_URL: str = "wss://events-po.com/socket.io/?EIO=4&transport=websocket"
+    # Real-time price feed — demo-api-eu is the correct server for updateStream
+    EVENTS_WS_URL: str = "wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket"
     EVENTS_WS_ORIGIN: str = "https://pocketoption.com"
 
     # ── Session ───────────────────────────────────────────────────────────────
