@@ -88,7 +88,10 @@ class QuoteDecoder:
                 try:
                     text = raw.decode("utf-8")
                     payload = json.loads(text)
-                    logger.debug("[BINARY→JSON] %s", payload)
+                    log_text = str(payload)
+                    if len(log_text) > 300:
+                        log_text = log_text[:300] + " ... [TRUNCATED]"
+                    logger.debug("[BINARY→JSON] %s", log_text)
                     if isinstance(payload, dict) and "symbol" in payload:
                         q = self._extract_quote(payload)
                         if q:
