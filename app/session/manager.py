@@ -153,8 +153,12 @@ class SessionManager:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         }
-        # Send ONLY autologin cookie — ci_session has the wrong IP and would conflict
-        cookies = {"autologin": autologin}
+        # Send all cookies EXCEPT ci_session (which has the wrong IP and causes conflict).
+        # PO might require po_uuid or other cookies to process the autologin.
+        cookies = {k: v for k, v in self._cookies.items() if k != "ci_session"}
+        if "autologin" not in cookies:
+            logger.warning("auto_refresh_session: no autologin cookie available")
+            return False
 
         try:
             from curl_cffi.requests import AsyncSession
