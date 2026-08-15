@@ -19,19 +19,19 @@ import logging
 import time
 import urllib.parse
 from pathlib import Path
+import os
+from typing import Optional
 
 import aiohttp
+
+from app.config import settings
+from app.broker.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
 
 # Cookies whose presence confirms a live authenticated session
 AUTH_SIGNAL_COOKIES = {"ci_session", "loggedIn", "autologin", "po_uuid"}
 
-
-import os
-from typing import Optional
-
-from app.broker.redis_client import RedisClient
 
 class SessionManager:
     """
